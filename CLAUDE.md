@@ -98,3 +98,8 @@ jamais commité — modèle dans `.env.example`).
   hors cycle de vie du serveur). Pièges du flux notés dans le module :
   mois 0-based dans les URLs, prix entiers ÷ 10^facteur (5 forex, 3
   paires JPY/métaux/indices), 404 = week-end/férié/hors historique.
+- **2026-07-18** — Bug corrigé : `.gitignore` contenait `data/` non ancré,
+  qui ignorait aussi `pyea/data/` et `tests/data/` (du code !) —
+  `data_market_feed.py` n'avait jamais été commité. Motifs ancrés en
+  `/data/` et `/logs/`. Leçon : ancrer à la racine tout motif visant un
+  dossier de données local.
