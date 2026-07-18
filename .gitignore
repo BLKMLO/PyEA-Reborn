@@ -8,9 +8,9 @@ __pycache__/
 .venv/
 venv/
 
-# Données locales & logs
-data/
-logs/
+# Données locales & logs (racine uniquement — pyea/data/ est du code !)
+/data/
+/logs/
 *.db
 *.sqlite3
 
