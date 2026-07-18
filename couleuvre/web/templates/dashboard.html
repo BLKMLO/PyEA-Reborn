@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard — Couleuvre EA{% endblock %}
+
+{% block head %}
+  <!-- Chart.js via CDN, uniquement sur les pages qui affichent des graphiques. -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+{% endblock %}
+
+{% block content %}
+  <!-- Statut de l'EA, rafraîchi périodiquement via HTMX. -->
+  <section class="mb-6 rounded-lg bg-slate-800 p-4"
+           hx-get="/api/status" hx-trigger="load, every 10s" hx-swap="none"
+           hx-on::after-request="document.getElementById('status-json').textContent = event.detail.xhr.responseText">
+    <h2 class="mb-2 text-lg font-medium">Statut</h2>
+    <pre id="status-json" class="overflow-x-auto text-sm text-slate-300">Chargement…</pre>
+  </section>
+
+  <!-- Graphique de prix (données factices pour l'instant). -->
+  <section class="mb-6 rounded-lg bg-slate-800 p-4">
+    <h2 class="mb-2 text-lg font-medium">Prix — DEMO</h2>
+    <canvas id="price-chart" class="max-h-96 w-full"></canvas>
+  </section>
+
+  <!-- Derniers logs. -->
+  <section class="rounded-lg bg-slate-800 p-4"
+           hx-get="/api/logs?count=50" hx-trigger="load, every 15s" hx-swap="none"
+           hx-on::after-request="document.getElementById('log-lines').textContent = JSON.parse(event.detail.xhr.responseText).lines.join('\n')">
+    <h2 class="mb-2 text-lg font-medium">Logs</h2>
+    <pre id="log-lines" class="max-h-64 overflow-y-auto text-xs text-slate-400">Chargement…</pre>
+  </section>
+{% endblock %}
+
+{% block scripts %}
+  <script src="/static/js/charts.js"></script>
+{% endblock %}

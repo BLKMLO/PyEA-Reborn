@@ -1,0 +1,33 @@
+# Configuration fonctionnelle de l'EA Couleuvre.
+# Les secrets (identifiants, host/ports réels) vivent dans .env — jamais ici.
+
+server:
+  host: "127.0.0.1"
+  port: 8000
+
+broker:
+  # Broker actif : doit correspondre à une clé du registre de gateways.
+  name: "interactive_brokers"
+  # "paper" ou "live". Le port TWS/Gateway correspondant est lu dans .env
+  # (IB_PORT_PAPER / IB_PORT_LIVE) : passer en live = changer cette valeur.
+  trading_mode: "paper"
+
+strategy:
+  # Stratégie active : doit correspondre à une clé du registre de stratégies.
+  name: "couleuvre_v0_1"
+  enabled: false
+
+risk:
+  max_position_size: 1
+  max_daily_loss_pct: 2.0
+  max_open_positions: 1
+
+storage:
+  # URL SQLAlchemy — remplacer par postgresql+psycopg://... pour migrer.
+  database_url: "sqlite:///./data/couleuvre.db"
+
+logging:
+  level: "INFO"
+  file: "./logs/couleuvre.log"
+  # Nombre de lignes de log conservées en mémoire pour l'interface web.
+  web_buffer_size: 500
