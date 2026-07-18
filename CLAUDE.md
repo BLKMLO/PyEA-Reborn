@@ -77,6 +77,15 @@ jamais commité — modèle dans `.env.example`).
   (`/opt/pw-browsers/chromium`) — Chromium ne voit pas le proxy, d'où la
   vendorisation des libs front (qui était de toute façon souhaitable).
 
+## Documentation
+
+- `README.md` = présentation concise + démarrage rapide uniquement.
+- La doc technique vit dans `docs/` : `architecture.md` (arborescence,
+  règles, conventions, où ajouter du code), `donnees_historiques.md`
+  (Dukascopy, Parquet, timeframes), `choix_techniques.md` (justifications).
+- Conséquence : toute évolution d'architecture ou de convention se
+  répercute dans `docs/` (et ici), pas dans le README.
+
 ## Préférences utilisateur
 
 - Répondre et documenter en **français**.
@@ -142,3 +151,7 @@ jamais commité — modèle dans `.env.example`).
   fonctionner sans internet sortant (VPS), versions déterministes, et le
   Chromium de la sandbox ne passait pas par le proxy pour les CDN.
   Toujours zéro build front.
+- **2026-07-18** — Docs restructurées à la demande de l'utilisateur : le
+  README (trop technique) devient présentation + « Démarrage rapide » ;
+  la doc technique part dans `docs/` (architecture, données historiques,
+  choix techniques).
