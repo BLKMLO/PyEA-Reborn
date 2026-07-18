@@ -270,6 +270,50 @@ async def download_history(
     return written
 
 
+# Timeframes supportés par resample_history (M1 = natif, pas de conversion).
+_TIMEFRAME_RULES = {
+    "M1": "1min",
+    "M5": "5min",
+    "M15": "15min",
+    "M30": "30min",
+    "H1": "1h",
+    "H4": "4h",
+    "D1": "1D",
+    "W1": "1W",
+    "MN1": "1ME",
+}
+
+
+def resample_history(frame: pd.DataFrame, timeframe: str) -> pd.DataFrame:
+    """Ré-échantillonne un DataFrame M1 (issu de load_history) vers un
+    timeframe supérieur (M5, M15, M30, H1, H4, D1, W1, MN1).
+
+    OHLC bid/ask : first/max/min/last ; volume : somme. Les périodes sans
+    aucune bougie M1 (week-ends, jours fériés) sont retirées.
+    """
+    key = timeframe.upper()
+    try:
+        rule = _TIMEFRAME_RULES[key]
+    except KeyError:
+        supported = ", ".join(_TIMEFRAME_RULES)
+        raise ValueError(f"Timeframe inconnu '{timeframe}'. Supportés : {supported}")
+    if key == "M1":
+        return frame
+
+    aggregations: dict[str, str] = {}
+    for side in ("bid", "ask"):
+        if f"{side}_open" in frame.columns:
+            aggregations[f"{side}_open"] = "first"
+            aggregations[f"{side}_high"] = "max"
+            aggregations[f"{side}_low"] = "min"
+            aggregations[f"{side}_close"] = "last"
+    if "volume" in frame.columns:
+        aggregations["volume"] = "sum"
+
+    resampled = frame.resample(rule).agg(aggregations)
+    return resampled.dropna(subset=[next(iter(aggregations))])
+
+
 def load_history(
     data_dir: Path,
     symbol: str,

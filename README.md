@@ -71,7 +71,9 @@ PyEA-Reborn/
 │   │
 │   └── web/
 │       ├── templates/                     # base.html, dashboard.html.
-│       └── static/js/charts.js            # Initialisation Chart.js (jamais inline dans les templates).
+│       └── static/
+│           ├── js/charts.js               # Initialisation Chart.js (jamais inline dans les templates).
+│           └── vendor/                    # Tailwind, HTMX, Chart.js servis en local (pas de CDN).
 │
 └── tests/                                 # Structure miroir de pyea/ (un dossier par package).
 ```
@@ -113,8 +115,10 @@ Télécharge les bougies **M1 bid/ask** depuis le flux public Dukascopy
 (gratuit, sans compte) pour les 31 instruments de `config.yaml:history`
 (majeures, croisées, XAUUSD/XAGUSD, US500), depuis `history.start_year`
 (2010 par défaut, réglable). Stockage :
-`data/history/<SYMBOLE>/<SYMBOLE>_m1_<année>.parquet` — relu par la
-future interface de backtest via `load_history()`. Le téléchargement est
+`data/history/<SYMBOLE>/<SYMBOLE>_m1_<année>.parquet` — un dossier par
+actif (supprimer une paire = supprimer son dossier), relu par la future
+interface de backtest via `load_history()`, avec conversion vers M5, M15,
+M30, H1, H4, D1, W1 ou MN1 par `resample_history()`. Le téléchargement est
 **incrémental** (les années déjà présentes sont sautées ; `--force` pour
 re-télécharger). Un run complet représente des centaines de milliers de
 petits fichiers côté serveur : comptez plusieurs heures et ~10-20 Go.
@@ -150,10 +154,13 @@ Dukascopy ; les années absentes sont simplement signalées et sautées.
   simplicité/maintenance aujourd'hui.
 - **SQLite + SQLAlchemy** : zéro infra au départ ; la migration Postgres
   se réduit à changer `storage.database_url`.
-- **HTMX + Tailwind + Chart.js via CDN** : aucun build front, dashboard et
-  formulaires triviaux à écrire ; Tailwind ne gère que le style et
-  n'interfère pas avec Chart.js, dont l'initialisation est centralisée
-  dans `static/js/charts.js` et alimentée par `/api/charts/*`.
+- **HTMX + Tailwind + Chart.js, vendorisés en local** : aucun build front,
+  dashboard et formulaires triviaux à écrire ; les libs sont servies
+  depuis `static/vendor/` (pas de CDN au runtime — un dashboard de
+  trading sur VPS doit fonctionner sans internet sortant, avec des
+  versions déterministes). Tailwind ne gère que le style et n'interfère
+  pas avec Chart.js, dont l'initialisation est centralisée dans
+  `static/js/charts.js` et alimentée par `/api/charts/*`.
 
 ## Tests
 

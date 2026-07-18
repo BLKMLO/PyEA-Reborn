@@ -53,6 +53,36 @@ jamais commité — modèle dans `.env.example`).
 - Tests : `tests/<package>/test_<module>.py`, miroir strict du source.
 - Graphiques : init Chart.js uniquement dans `pyea/web/static/js/charts.js`,
   données via endpoints JSON `/api/charts/*`.
+- Libs front (Tailwind, HTMX, Chart.js) **vendorisées** dans
+  `pyea/web/static/vendor/` — jamais de CDN au runtime (le dashboard doit
+  marcher sur un VPS sans internet sortant).
+
+## Données historiques (backtest)
+
+- Layout : `data/history/<SYMBOLE>/<SYMBOLE>_m1_<année>.parquet` — un
+  dossier par actif, un fichier par année. Supprimer une paire = supprimer
+  son dossier ; supprimer une période = supprimer les fichiers d'années.
+- M1 natif (bid/ask OHLC + volume, index UTC). Conversion vers M5, M15,
+  M30, H1, H4, D1, W1, MN1 : `resample_history(frame, "H1")` dans
+  `data_history_downloader.py` — le backtest H1 rechargera le M1 puis
+  ré-échantillonnera (2 lignes de code, quelques secondes par année).
+- `load_history(data_dir, symbol, start, end)` = point d'entrée de lecture.
+
+## Notes environnement de dev (sandbox Claude)
+
+- Réseau sortant filtré par proxy : `datafeed.dukascopy.com` **bloqué**
+  (503) — le téléchargeur n'est validé que par tests unitaires ; premier
+  run réel à vérifier chez l'utilisateur. Les CDN npm/jsdelivr passent.
+- Captures d'écran du dashboard : Playwright + Chromium
+  (`/opt/pw-browsers/chromium`) — Chromium ne voit pas le proxy, d'où la
+  vendorisation des libs front (qui était de toute façon souhaitable).
+
+## Préférences utilisateur
+
+- Répondre et documenter en **français**.
+- Après chaque modification : réfléchir systématiquement aux
+  **conséquences annexes** (config, docs, tests, .gitignore, CLAUDE.md).
+- Maintenir ce fichier comme mémoire persistante du projet.
 
 ## État du projet
 
@@ -103,3 +133,12 @@ jamais commité — modèle dans `.env.example`).
   `data_market_feed.py` n'avait jamais été commité. Motifs ancrés en
   `/data/` et `/logs/`. Leçon : ancrer à la racine tout motif visant un
   dossier de données local.
+- **2026-07-18** — `resample_history()` ajouté (M1 → M5/M15/M30/H1/H4/
+  D1/W1/MN1) : le backtest sur timeframe supérieur part toujours du M1
+  stocké. Demande utilisateur : couvrir plusieurs timeframes.
+- **2026-07-18** — Libs front passées de CDN à **vendorisées**
+  (`static/vendor/` : tailwind.js, htmx.min.js 1.9.12,
+  chart.umd.min.js 4.4.3). Raisons : un dashboard de trading doit
+  fonctionner sans internet sortant (VPS), versions déterministes, et le
+  Chromium de la sandbox ne passait pas par le proxy pour les CDN.
+  Toujours zéro build front.

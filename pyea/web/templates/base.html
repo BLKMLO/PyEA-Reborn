@@ -4,10 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}PyEA{% endblock %}</title>
-  <!-- Tailwind : style uniquement (mise en page, couleurs, espacements). -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  <!-- HTMX : interactions REST sans build front. -->
-  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <!-- Libs servies en local (static/vendor) : le dashboard doit fonctionner
+       sans accès internet (VPS de trading). Tailwind = style uniquement. -->
+  <script src="/static/vendor/tailwind.js"></script>
+  <script src="/static/vendor/htmx.min.js"></script>
   {% block head %}{% endblock %}
 </head>
 <body class="h-full bg-slate-900 text-slate-100">
