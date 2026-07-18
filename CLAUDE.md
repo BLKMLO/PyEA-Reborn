@@ -98,7 +98,9 @@ jamais commité — modèle dans `.env.example`).
 - Échafaudage complet et fonctionnel : serveur web, REST + WebSocket,
   registres stratégie/broker, SQLAlchemy (SQLite), 19 tests verts.
 - Dashboard live façon TradingView : chandeliers M1 au centre
-  (chartjs-chart-financial), watchlist à droite (clic = onglet, pastille
+  (**TradingView Lightweight Charts** : pan/zoom natifs, historique
+  paginé via `?before=`, refresh incrémental `series.update` qui
+  préserve le défilement), watchlist à droite (clic = onglet, pastille
   verte = « en trading » d'après `strategy.symbols` + `strategy.enabled`),
   panneau bas Positions (fermées grisées, récentes en premier) / Logs,
   P&L total en bas à droite, switch Live/Backtest dans le header
@@ -192,3 +194,14 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
   chartjs-chart-financial (chandeliers). Les logs restent accessibles
   (onglet du panneau bas). Tout le factice est concentré dans les
   fonctions `_demo_*` d'`api_rest.py`, à remplacer au câblage réel.
+- **2026-07-18** — Graphique de prix migré de Chart.js+chartjs-chart-financial
+  vers **TradingView Lightweight Charts 4.2.0** (vendorisé), suite à la
+  demande « remonter le graphique dans le passé ». Raisonnement : le
+  défilement est une capacité de la lib de graphique, pas du framework —
+  React/Vite rejeté (build imposé, contraire au principe zéro-build, sans
+  résoudre le besoin). Pagination `/api/charts/price-history?before=`
+  (secondes epoch), historique démo borné à 3 jours (`has_more`).
+  luxon + adaptateur + plugin financier supprimés du vendor ; Chart.js
+  conservé pour les futurs graphiques classiques. Le logo TradingView sur
+  le graphique = attribution obligatoire (licence Apache 2.0), ne pas
+  l'enlever.

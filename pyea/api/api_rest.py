@@ -80,49 +80,83 @@ def _base_price(symbol: str) -> float:
     return round(0.8 + (seed % 100) / 100, 4)
 
 
-def _demo_candles(symbol: str, points: int) -> list[dict[str, float]]:
-    """Marche aléatoire M1 déterministe : seed par (symbole, minute)."""
+# Profondeur de l'historique de démo : 3 jours de M1. Au-delà, l'API
+# répond « plus de données » — le front arrête alors de paginer.
+_DEMO_HISTORY_MINUTES = 3 * 24 * 60
+
+
+def _demo_origin_minute() -> int:
+    """Première minute de l'historique de démo (origine FIXE de la marche
+    aléatoire, alignée sur minuit UTC pour être stable entre requêtes)."""
     now_minute = int(datetime.now(timezone.utc).timestamp() // 60)
+    return (now_minute // 1440) * 1440 - _DEMO_HISTORY_MINUTES
+
+
+def _demo_candles(symbol: str, end_minute: int, points: int) -> list[dict[str, float]]:
+    """Bougies M1 déterministes se terminant à ``end_minute`` inclus.
+
+    La marche aléatoire part toujours de l'origine fixe (seed par
+    symbole+minute) : deux requêtes sur la même plage donnent les mêmes
+    bougies, et la pagination vers le passé reste cohérente.
+    """
+    origin = _demo_origin_minute()
+    start_minute = max(origin, end_minute - points + 1)
+    if end_minute < origin:
+        return []
     base = _base_price(symbol)
     price = base
     candles: list[dict[str, float]] = []
-    for minute in range(now_minute - points + 1, now_minute + 1):
+    for minute in range(origin, end_minute + 1):
         rng = random.Random(f"{symbol}:{minute}")
         open_ = price
         close = open_ + rng.uniform(-1, 1) * base * 0.0008
-        high = max(open_, close) + rng.uniform(0, base * 0.0004)
-        low = min(open_, close) - rng.uniform(0, base * 0.0004)
-        candles.append(
-            {
-                "time": minute * 60 * 1000,  # ms epoch pour l'axe temps Chart.js
-                "open": round(open_, 5),
-                "high": round(high, 5),
-                "low": round(low, 5),
-                "close": round(close, 5),
-            }
-        )
+        if minute >= start_minute:
+            high = max(open_, close) + rng.uniform(0, base * 0.0004)
+            low = min(open_, close) - rng.uniform(0, base * 0.0004)
+            candles.append(
+                {
+                    "time": minute * 60,  # secondes epoch (format Lightweight Charts)
+                    "open": round(open_, 5),
+                    "high": round(high, 5),
+                    "low": round(low, 5),
+                    "close": round(close, 5),
+                }
+            )
         price = close
     return candles
 
 
 @router.get("/charts/price-history")
-async def get_price_history(symbol: str = "EURUSD", points: int = 120) -> dict[str, Any]:
-    """Bougies M1 du symbole pour le graphique central (démo déterministe)."""
+async def get_price_history(
+    symbol: str = "EURUSD", points: int = 120, before: int | None = None
+) -> dict[str, Any]:
+    """Bougies M1 du symbole pour le graphique central (démo déterministe).
+
+    Sans ``before`` : les ``points`` dernières bougies. Avec ``before``
+    (epoch secondes) : les ``points`` bougies STRICTEMENT antérieures —
+    c'est la pagination utilisée par le défilement vers le passé.
+    ``has_more`` indique s'il reste de l'historique plus ancien.
+    """
     settings = get_settings()
     if symbol not in settings.history_instruments:
         raise HTTPException(status_code=404, detail=f"Symbole inconnu : {symbol}")
-    points = max(10, min(points, 500))
-    return {"symbol": symbol, "candles": _demo_candles(symbol, points)}
+    points = max(10, min(points, 1000))
+    now_minute = int(datetime.now(timezone.utc).timestamp() // 60)
+    end_minute = now_minute if before is None else min(before // 60 - 1, now_minute)
+    candles = _demo_candles(symbol, end_minute, points)
+    has_more = bool(candles) and candles[0]["time"] // 60 > _demo_origin_minute()
+    return {"symbol": symbol, "candles": candles, "has_more": has_more}
 
 
 def _demo_positions(settings: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Positions de démonstration bâties sur les symboles tradés."""
     now = datetime.now(timezone.utc)
+    now_minute = int(now.timestamp() // 60)
     open_positions = []
     for i, symbol in enumerate(settings.strategy_symbols[:3]):
         rng = random.Random(f"open:{symbol}")
         entry = _base_price(symbol)
-        current = _demo_candles(symbol, 1)[-1]["close"]
+        current = _demo_candles(symbol, now_minute, 1)[-1]["close"]
         quantity = rng.choice([0.5, 1.0, 2.0])
         side = rng.choice(["BUY", "SELL"])
         direction = 1 if side == "BUY" else -1

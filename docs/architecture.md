@@ -55,8 +55,8 @@ PyEA-Reborn/
 │       │                                  # dashboard.html (live), backtest.html (placeholder).
 │       └── static/
 │           ├── js/charts.js               # Logique du dashboard : graphique, watchlist, positions.
-│           └── vendor/                    # Tailwind, HTMX, Chart.js (+ luxon, adaptateur,
-│                                          # chartjs-chart-financial pour les chandeliers) — local, pas de CDN.
+│           └── vendor/                    # Tailwind, HTMX, Lightweight Charts (chandeliers),
+│                                          # Chart.js (futurs graphiques P&L) — local, pas de CDN.
 │
 ├── docs/                                  # Cette documentation.
 └── tests/                                 # Structure miroir de pyea/ (un dossier par package).

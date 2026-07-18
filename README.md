@@ -2,7 +2,8 @@
 
 **PyEA** est un Expert Advisor de trading algorithmique : cœur en
 Python 3.11+, pilotage intégral depuis une interface web (FastAPI +
-HTMX + Tailwind + Chart.js), exécution chez Interactive Brokers — en
+HTMX + Tailwind, graphiques TradingView Lightweight Charts), exécution
+chez Interactive Brokers — en
 paper trading d'abord. Son moteur de décision, **Couleuvre**, est une
 stratégie basée sur un modèle LightGBM (`couleuvre_v0_1`), conçue comme
 un plugin parmi d'autres possibles.

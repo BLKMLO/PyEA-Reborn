@@ -3,11 +3,10 @@
 {% block title %}Live — PyEA{% endblock %}
 
 {% block head %}
-  <!-- Chart.js + axe temps (luxon) + chandeliers (chart-financial), en local. -->
-  <script src="/static/vendor/chart.umd.min.js"></script>
-  <script src="/static/vendor/luxon.min.js"></script>
-  <script src="/static/vendor/chartjs-adapter-luxon.umd.min.js"></script>
-  <script src="/static/vendor/chartjs-chart-financial.min.js"></script>
+  <!-- TradingView Lightweight Charts (local) : chandeliers, pan/zoom,
+       historique paginé. Chart.js (vendor) reste disponible pour les
+       futurs graphiques classiques (P&L, distributions). -->
+  <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
 {% endblock %}
 
 {% block content %}
@@ -19,9 +18,7 @@
           <h2 id="chart-title" class="text-base font-medium">—</h2>
           <span id="chart-updated" class="text-xs text-slate-500"></span>
         </div>
-        <div class="relative min-h-0 flex-1">
-          <canvas id="price-chart" class="absolute inset-0"></canvas>
-        </div>
+        <div id="price-chart" class="relative min-h-0 flex-1"></div>
       </div>
     </main>
 

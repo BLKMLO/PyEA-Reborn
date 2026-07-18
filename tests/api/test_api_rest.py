@@ -49,10 +49,35 @@ def test_price_history_bougies_ohlc() -> None:
     data = response.json()
     assert response.status_code == 200
     assert data["symbol"] == "EURUSD"
+    assert data["has_more"] is True
     assert len(data["candles"]) == 30
     candle = data["candles"][0]
     assert candle["low"] <= min(candle["open"], candle["close"])
     assert candle["high"] >= max(candle["open"], candle["close"])
+
+
+def test_price_history_pagination_vers_le_passe() -> None:
+    with _client() as client:
+        page1 = client.get("/api/charts/price-history?symbol=EURUSD&points=30").json()
+        oldest = page1["candles"][0]["time"]
+        page2 = client.get(
+            f"/api/charts/price-history?symbol=EURUSD&points=30&before={oldest}"
+        ).json()
+    # Strictement antérieures, contiguës (M1 = 60 s) et déterministes :
+    # le close de la page ancienne = l'open de la page récente.
+    assert all(candle["time"] < oldest for candle in page2["candles"])
+    assert page2["candles"][-1]["time"] == oldest - 60
+    assert page2["candles"][-1]["close"] == page1["candles"][0]["open"]
+
+
+def test_price_history_fin_d_historique() -> None:
+    with _client() as client:
+        # Bien avant l'origine de la démo (3 jours) : plus aucune bougie.
+        response = client.get(
+            "/api/charts/price-history?symbol=EURUSD&points=30&before=60"
+        ).json()
+    assert response["candles"] == []
+    assert response["has_more"] is False
 
 
 def test_price_history_symbole_inconnu_404() -> None:

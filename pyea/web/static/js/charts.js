@@ -4,6 +4,10 @@
  * Règle du projet : tout graphique est créé ici (jamais inline dans les
  * templates) et se nourrit des endpoints JSON /api/*.
  *
+ * - Graphique central : TradingView Lightweight Charts (chandeliers,
+ *   pan/zoom natifs). L'historique se charge par pages en défilant vers
+ *   le passé ; le refresh périodique passe par series.update() et ne
+ *   touche donc pas à la position de défilement.
  * - Watchlist à droite : un clic = un onglet, le graphique bascule.
  * - Seul le graphique ACTIF est rafraîchi, toutes les N secondes
  *   (N = ui.chart_refresh_seconds de config.yaml, servi par /api/status).
@@ -13,7 +17,11 @@
 "use strict";
 
 const state = {
-  chart: null,
+  chart: null,          // instance LightweightCharts
+  series: null,         // série chandeliers
+  candles: [],          // bougies chargées (ordre chronologique)
+  hasMore: true,        // reste-t-il de l'historique côté serveur ?
+  loadingOlder: false,  // garde anti-requêtes concurrentes du lazy-load
   activeSymbol: null,
   refreshSeconds: 5,
   timer: null,
@@ -22,51 +30,91 @@ const state = {
 const UP_COLOR = "#34d399";
 const DOWN_COLOR = "#f87171";
 
-// --- Graphique -------------------------------------------------------------
+// --- Graphique (TradingView Lightweight Charts) ----------------------------
+// Pan/zoom natifs ; on remonte le passé par pagination : quand l'utilisateur
+// approche du bord gauche, on précharge les bougies antérieures (`before=`).
 
-function createChart(symbol, candles) {
-  const ctx = document.getElementById("price-chart");
-  if (state.chart) state.chart.destroy();
-  state.chart = new Chart(ctx, {
-    type: "candlestick",
-    data: {
-      datasets: [{
-        label: symbol,
-        data: candles.map(c => ({ x: c.time, o: c.open, h: c.high, l: c.low, c: c.close })),
-        color: { up: UP_COLOR, down: DOWN_COLOR, unchanged: "#94a3b8" },
-        borderColor: { up: UP_COLOR, down: DOWN_COLOR, unchanged: "#94a3b8" },
-      }],
+function createChart() {
+  const container = document.getElementById("price-chart");
+  if (state.chart) state.chart.remove();
+  state.chart = LightweightCharts.createChart(container, {
+    layout: { background: { color: "transparent" }, textColor: "#94a3b8" },
+    grid: {
+      vertLines: { color: "#1e293b" },
+      horzLines: { color: "#334155" },
     },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: {
-          type: "time",
-          time: { unit: "minute" },
-          ticks: { color: "#94a3b8", maxTicksLimit: 12 },
-          grid: { color: "#1e293b" },
-        },
-        y: {
-          position: "right",
-          ticks: { color: "#94a3b8" },
-          grid: { color: "#334155" },
-        },
-      },
-    },
+    timeScale: { timeVisible: true, secondsVisible: false, borderColor: "#334155" },
+    rightPriceScale: { borderColor: "#334155" },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    autoSize: true,
+  });
+  state.series = state.chart.addCandlestickSeries({
+    upColor: UP_COLOR, downColor: DOWN_COLOR,
+    wickUpColor: UP_COLOR, wickDownColor: DOWN_COLOR,
+    borderVisible: false,
+  });
+  // Lazy-load du passé : déclenché quand la fenêtre visible approche du
+  // début des données chargées.
+  state.chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+    if (range && range.from < 15) loadOlderCandles();
   });
 }
 
-async function refreshChart() {
-  if (!state.activeSymbol) return;
-  const response = await fetch(`/api/charts/price-history?symbol=${state.activeSymbol}&points=120`);
+async function loadInitialCandles() {
+  const response = await fetch(`/api/charts/price-history?symbol=${state.activeSymbol}&points=180`);
   if (!response.ok) return;
   const data = await response.json();
   if (data.symbol !== state.activeSymbol) return; // clic entre-temps
-  createChart(data.symbol, data.candles);
-  document.getElementById("chart-title").textContent = `${data.symbol} — M1`;
+  state.candles = data.candles;
+  state.hasMore = data.has_more;
+  state.series.setData(state.candles);
+  state.chart.timeScale().scrollToRealTime();
+  setChartHeader();
+}
+
+async function loadOlderCandles() {
+  if (state.loadingOlder || !state.hasMore || !state.candles.length) return;
+  state.loadingOlder = true;
+  try {
+    const oldest = state.candles[0].time;
+    const response = await fetch(
+      `/api/charts/price-history?symbol=${state.activeSymbol}&points=180&before=${oldest}`);
+    if (!response.ok) return;
+    const data = await response.json();
+    if (data.symbol !== state.activeSymbol || !data.candles.length) return;
+    state.candles = data.candles.concat(state.candles);
+    state.hasMore = data.has_more;
+    // setData avec les données préfixées : Lightweight Charts conserve la
+    // plage visible — le défilement de l'utilisateur n'est pas perturbé.
+    state.series.setData(state.candles);
+  } finally {
+    state.loadingOlder = false;
+  }
+}
+
+async function refreshChart() {
+  // Rafraîchissement périodique : uniquement les dernières bougies, via
+  // series.update() — la position de défilement est préservée.
+  if (!state.activeSymbol || !state.series) return;
+  const response = await fetch(`/api/charts/price-history?symbol=${state.activeSymbol}&points=10`);
+  if (!response.ok) return;
+  const data = await response.json();
+  if (data.symbol !== state.activeSymbol) return;
+  for (const candle of data.candles) {
+    const last = state.candles[state.candles.length - 1];
+    if (!last || candle.time > last.time) {
+      state.candles.push(candle);
+      state.series.update(candle);
+    } else if (candle.time === last.time) {
+      state.candles[state.candles.length - 1] = candle;
+      state.series.update(candle);
+    }
+  }
+  setChartHeader();
+}
+
+function setChartHeader() {
+  document.getElementById("chart-title").textContent = `${state.activeSymbol} — M1`;
   document.getElementById("chart-updated").textContent =
     `maj ${new Date().toLocaleTimeString()} (toutes les ${state.refreshSeconds}s)`;
 }
@@ -81,10 +129,13 @@ function scheduleRefresh() {
 
 function setActiveSymbol(symbol) {
   state.activeSymbol = symbol;
+  state.candles = [];
+  state.hasMore = true;
   document.querySelectorAll("#symbol-list li").forEach(li => {
     li.classList.toggle("bg-slate-700", li.dataset.symbol === symbol);
   });
-  refreshChart();
+  createChart();          // nouveau graphique vierge pour l'onglet
+  loadInitialCandles();
 }
 
 async function loadSymbols() {
