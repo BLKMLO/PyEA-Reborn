@@ -97,7 +97,7 @@ jamais commité — modèle dans `.env.example`).
 
 - Échafaudage complet et fonctionnel : serveur web, dashboard
   (statut + graphique factice + logs), REST + WebSocket, registres
-  stratégie/broker, SQLAlchemy (SQLite), 11 tests verts.
+  stratégie/broker, SQLAlchemy (SQLite), 15 tests verts.
 - Téléchargeur d'historique M1 Dukascopy opérationnel côté code
   (`download_history.py` + `pyea/data/data_history_downloader.py`,
   31 instruments dans `config.yaml:history`, Parquet par symbole/année
@@ -109,6 +109,24 @@ jamais commité — modèle dans `.env.example`).
 - **Squelettes vides** (NotImplementedError) à développer plus tard :
   logique LightGBM de `CouleuvreV01` (warmup/on_tick), `RiskManager.evaluate`,
   `InteractiveBrokersGateway` (appels ib_async réels), `MarketDataFeed`.
+
+## Points de vigilance (audit modularité 2026-07-18)
+
+Le graphe d'imports est sain (aucun module métier n'importe `api/`,
+dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
+`config_settings.py`). Trois points à surveiller, pas à corriger :
+
+1. `event_bus` et `web_log_buffer` sont des singletons de module, pas
+   injectés par `create_app()` (incohérent avec `MarketDataFeed` qui
+   reçoit son bus). Si les tests exigent un jour des bus isolés, les
+   faire passer par `app_factory`.
+2. `/api/status` code en dur `broker_connected: False` — le vrai câblage
+   devra exposer la gateway via `app.state`, jamais par import direct
+   dans `api_rest`.
+3. Le `lifespan` de `app_factory` ne monte pas encore gateway + stratégie
+   + feed : c'est au premier câblage complet que le flux
+   `Signal → RiskManager → OrderRequest` devra être imposé (aucun
+   raccourci stratégie→broker, même « pour tester »).
 
 ## Journal de décisions
 
