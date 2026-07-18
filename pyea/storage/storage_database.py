@@ -12,8 +12,8 @@ from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from couleuvre.config.config_settings import get_settings
-from couleuvre.storage.storage_models import Base
+from pyea.config.config_settings import get_settings
+from pyea.storage.storage_models import Base
 
 _engine = None
 _session_factory: sessionmaker[Session] | None = None

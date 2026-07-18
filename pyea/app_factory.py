@@ -14,10 +14,10 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from couleuvre.api import api_pages, api_rest, api_websocket
-from couleuvre.config.config_settings import get_settings
-from couleuvre.core.core_logging import get_logger, setup_logging
-from couleuvre.storage.storage_database import init_db
+from pyea.api import api_pages, api_rest, api_websocket
+from pyea.config.config_settings import get_settings
+from pyea.core.core_logging import get_logger, setup_logging
+from pyea.storage.storage_database import init_db
 
 STATIC_DIR = Path(__file__).resolve().parent / "web" / "static"
 
@@ -29,7 +29,7 @@ async def lifespan(app: FastAPI):
     init_db()
     api_websocket.wire_event_bus()
     logger.info(
-        "Couleuvre démarré — broker=%s mode=%s stratégie=%s",
+        "PyEA démarré — broker=%s mode=%s stratégie=%s",
         settings.broker_name,
         settings.trading_mode,
         settings.strategy_name,
@@ -37,14 +37,14 @@ async def lifespan(app: FastAPI):
     # Plus tard : instancier la gateway broker, la stratégie active et le
     # MarketDataFeed ici, et les arrêter proprement après le yield.
     yield
-    logger.info("Couleuvre arrêté.")
+    logger.info("PyEA arrêté.")
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
     setup_logging(settings.log_level, settings.log_file, settings.log_web_buffer_size)
 
-    app = FastAPI(title="Couleuvre EA", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="PyEA", version="0.1.0", lifespan=lifespan)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     app.include_router(api_pages.router)
     app.include_router(api_rest.router)

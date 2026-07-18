@@ -1,4 +1,4 @@
-# Configuration fonctionnelle de l'EA Couleuvre.
+# Configuration fonctionnelle de PyEA.
 # Les secrets (identifiants, host/ports réels) vivent dans .env — jamais ici.
 
 server:
@@ -24,10 +24,10 @@ risk:
 
 storage:
   # URL SQLAlchemy — remplacer par postgresql+psycopg://... pour migrer.
-  database_url: "sqlite:///./data/couleuvre.db"
+  database_url: "sqlite:///./data/pyea.db"
 
 logging:
   level: "INFO"
-  file: "./logs/couleuvre.log"
+  file: "./logs/pyea.log"
   # Nombre de lignes de log conservées en mémoire pour l'interface web.
   web_buffer_size: 500

@@ -12,14 +12,14 @@ from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from couleuvre.core.core_events import (
+from pyea.core.core_events import (
     TOPIC_EA_STATUS,
     TOPIC_LOG,
     TOPIC_SIGNAL,
     TOPIC_TICK,
     event_bus,
 )
-from couleuvre.core.core_logging import get_logger
+from pyea.core.core_logging import get_logger
 
 logger = get_logger(__name__)
 router = APIRouter(tags=["websocket"])

@@ -1,6 +1,6 @@
 """Vérifie que la gateway IB est enregistrée et respecte le contrat."""
 
-from couleuvre.brokers import BrokerGateway, get_gateway
+from pyea.brokers import BrokerGateway, get_gateway
 
 
 def test_interactive_brokers_est_enregistree() -> None:

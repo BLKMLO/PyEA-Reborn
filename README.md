@@ -1,11 +1,15 @@
-# PyEA-Reborn — EA « Couleuvre »
+# PyEA-Reborn
 
-Expert Advisor de trading algorithmique. Cœur logique en Python 3.11+,
-pilotage intégral via une interface web (FastAPI + HTMX + Tailwind +
-Chart.js), exécution prévue chez Interactive Brokers (paper trading
-d'abord). Ce dépôt contient l'**échafaudage** : les contrats, le câblage
-et le dashboard sont en place ; la logique de trading (LightGBM, signaux,
-risk management) sera développée dans les modules déjà prévus pour elle.
+**PyEA** est le logiciel : un Expert Advisor de trading algorithmique en
+Python 3.11+, piloté intégralement via une interface web (FastAPI + HTMX +
+Tailwind + Chart.js), exécution prévue chez Interactive Brokers (paper
+trading d'abord). **« Couleuvre » est le moteur de décision** — la
+stratégie basée LightGBM (`couleuvre_v0_1`), une implémentation parmi
+d'autres possibles du contrat `Strategy`.
+
+Ce dépôt contient l'**échafaudage** : les contrats, le câblage et le
+dashboard sont en place ; la logique de trading (LightGBM, signaux, risk
+management) sera développée dans les modules déjà prévus pour elle.
 
 ## Démarrage
 
@@ -28,7 +32,7 @@ PyEA-Reborn/
 ├── .env.example                           # Modèle des secrets (.env réel jamais commité).
 ├── requirements.txt
 │
-├── couleuvre/                             # Package applicatif.
+├── pyea/                                  # Package applicatif.
 │   ├── app_factory.py                     # create_app() : SEUL endroit où les modules sont câblés.
 │   │
 │   ├── config/
@@ -67,7 +71,7 @@ PyEA-Reborn/
 │       ├── templates/                     # base.html, dashboard.html.
 │       └── static/js/charts.js            # Initialisation Chart.js (jamais inline dans les templates).
 │
-└── tests/                                 # Structure miroir de couleuvre/ (un dossier par package).
+└── tests/                                 # Structure miroir de pyea/ (un dossier par package).
 ```
 
 ## Conventions de nommage

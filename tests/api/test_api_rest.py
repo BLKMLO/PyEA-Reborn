@@ -2,7 +2,7 @@
 
 from fastapi.testclient import TestClient
 
-from couleuvre.app_factory import create_app
+from pyea.app_factory import create_app
 
 
 def _client() -> TestClient:
@@ -13,7 +13,7 @@ def test_dashboard_repond() -> None:
     with _client() as client:
         response = client.get("/")
     assert response.status_code == 200
-    assert "Couleuvre" in response.text
+    assert "PyEA" in response.text
 
 
 def test_status_repond() -> None:

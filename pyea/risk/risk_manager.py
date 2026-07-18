@@ -6,9 +6,9 @@ Aucun ordre ne part au broker sans passer ici.
 
 from __future__ import annotations
 
-from couleuvre.config.config_settings import Settings
-from couleuvre.core.core_domain import OrderRequest, Signal
-from couleuvre.core.core_logging import get_logger
+from pyea.config.config_settings import Settings
+from pyea.core.core_domain import OrderRequest, Signal
+from pyea.core.core_logging import get_logger
 
 logger = get_logger(__name__)
 

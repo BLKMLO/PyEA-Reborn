@@ -12,9 +12,9 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from couleuvre.config.config_settings import get_settings
-from couleuvre.core.core_logging import web_log_buffer
-from couleuvre.strategies.strategy_registry import list_strategies
+from pyea.config.config_settings import get_settings
+from pyea.core.core_logging import web_log_buffer
+from pyea.strategies.strategy_registry import list_strategies
 
 router = APIRouter(prefix="/api", tags=["api"])
 

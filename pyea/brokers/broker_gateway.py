@@ -10,7 +10,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Awaitable, Callable, Type
 
-from couleuvre.core.core_domain import OrderRequest, Position, TickData
+from pyea.core.core_domain import OrderRequest, Position, TickData
 
 TickCallback = Callable[[TickData], Awaitable[None]]
 

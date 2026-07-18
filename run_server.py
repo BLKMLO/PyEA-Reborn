@@ -1,4 +1,4 @@
-"""Point d'entrée CLI unique du projet Couleuvre.
+"""Point d'entrée CLI unique de PyEA.
 
 Usage :
     python run_server.py [--host HOST] [--port PORT] [--reload]
@@ -14,15 +14,15 @@ import argparse
 
 import uvicorn
 
-from couleuvre.config.config_settings import get_settings
+from pyea.config.config_settings import get_settings
 
 
 def main() -> None:
     settings = get_settings()
 
     parser = argparse.ArgumentParser(
-        prog="couleuvre",
-        description="Démarre le serveur web de l'EA Couleuvre.",
+        prog="pyea",
+        description="Démarre le serveur web de PyEA.",
     )
     parser.add_argument("--host", default=settings.server_host)
     parser.add_argument("--port", type=int, default=settings.server_port)
@@ -34,7 +34,7 @@ def main() -> None:
     args = parser.parse_args()
 
     uvicorn.run(
-        "couleuvre.app_factory:create_app",
+        "pyea.app_factory:create_app",
         factory=True,
         host=args.host,
         port=args.port,

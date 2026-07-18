@@ -47,9 +47,9 @@ class Settings(BaseSettings):
     risk_max_position_size: int = 1
     risk_max_daily_loss_pct: float = 2.0
     risk_max_open_positions: int = 1
-    database_url: str = "sqlite:///./data/couleuvre.db"
+    database_url: str = "sqlite:///./data/pyea.db"
     log_level: str = "INFO"
-    log_file: str = "./logs/couleuvre.log"
+    log_file: str = "./logs/pyea.log"
     log_web_buffer_size: int = 500
 
     @property

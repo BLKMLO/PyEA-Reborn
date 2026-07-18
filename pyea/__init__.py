@@ -1,4 +1,8 @@
-"""Couleuvre — Expert Advisor de trading algorithmique.
+"""PyEA — Expert Advisor de trading algorithmique.
+
+PyEA est le logiciel (plateforme : web, brokers, risque, stockage) ;
+« Couleuvre » désigne uniquement le moteur de décision, implémenté comme
+stratégie dans ``strategies/strategy_couleuvre_v0_1.py``.
 
 Packages :
 - ``config``     : chargement centralisé de la configuration (.env + config.yaml)

@@ -13,14 +13,14 @@ lors du branchement de l'exécution.
 
 from __future__ import annotations
 
-from couleuvre.brokers.broker_gateway import (
+from pyea.brokers.broker_gateway import (
     BrokerGateway,
     TickCallback,
     register_gateway,
 )
-from couleuvre.config.config_settings import Settings
-from couleuvre.core.core_domain import OrderRequest, Position
-from couleuvre.core.core_logging import get_logger
+from pyea.config.config_settings import Settings
+from pyea.core.core_domain import OrderRequest, Position
+from pyea.core.core_logging import get_logger
 
 logger = get_logger(__name__)
 

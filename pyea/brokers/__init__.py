@@ -6,7 +6,7 @@
   ici — rien d'autre à toucher (stratégie, risque, API restent inchangés).
 """
 
-from couleuvre.brokers import broker_interactive_brokers  # noqa: F401
-from couleuvre.brokers.broker_gateway import BrokerGateway, get_gateway, register_gateway
+from pyea.brokers import broker_interactive_brokers  # noqa: F401
+from pyea.brokers.broker_gateway import BrokerGateway, get_gateway, register_gateway
 
 __all__ = ["BrokerGateway", "get_gateway", "register_gateway"]

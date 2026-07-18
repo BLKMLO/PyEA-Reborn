@@ -10,9 +10,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from couleuvre.core.core_domain import Signal, TickData
-from couleuvre.strategies.strategy_base import Strategy
-from couleuvre.strategies.strategy_registry import register_strategy
+from pyea.core.core_domain import Signal, TickData
+from pyea.strategies.strategy_base import Strategy
+from pyea.strategies.strategy_registry import register_strategy
 
 
 @register_strategy

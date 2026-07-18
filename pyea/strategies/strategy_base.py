@@ -10,7 +10,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from couleuvre.core.core_domain import Signal, TickData
+from pyea.core.core_domain import Signal, TickData
 
 
 class Strategy(ABC):

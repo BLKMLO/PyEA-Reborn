@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Type
 
-from couleuvre.strategies.strategy_base import Strategy
+from pyea.strategies.strategy_base import Strategy
 
 _REGISTRY: dict[str, Type[Strategy]] = {}
 
