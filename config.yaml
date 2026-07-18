@@ -16,6 +16,16 @@ strategy:
   # Stratégie active : doit correspondre à une clé du registre de stratégies.
   name: "couleuvre_v0_1"
   enabled: false
+  # Actifs effectivement tradés par la stratégie (sous-ensemble de la
+  # watchlist history.instruments) — badge « en trading » du dashboard.
+  symbols:
+    - EURUSD
+    - GBPUSD
+    - XAUUSD
+
+ui:
+  # Période de rafraîchissement du graphique actif du dashboard (secondes).
+  chart_refresh_seconds: 5
 
 risk:
   max_position_size: 1

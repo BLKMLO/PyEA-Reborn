@@ -95,9 +95,18 @@ jamais commité — modèle dans `.env.example`).
 
 ## État du projet
 
-- Échafaudage complet et fonctionnel : serveur web, dashboard
-  (statut + graphique factice + logs), REST + WebSocket, registres
-  stratégie/broker, SQLAlchemy (SQLite), 15 tests verts.
+- Échafaudage complet et fonctionnel : serveur web, REST + WebSocket,
+  registres stratégie/broker, SQLAlchemy (SQLite), 19 tests verts.
+- Dashboard live façon TradingView : chandeliers M1 au centre
+  (chartjs-chart-financial), watchlist à droite (clic = onglet, pastille
+  verte = « en trading » d'après `strategy.symbols` + `strategy.enabled`),
+  panneau bas Positions (fermées grisées, récentes en premier) / Logs,
+  P&L total en bas à droite, switch Live/Backtest dans le header
+  (`/backtest` = placeholder). Rafraîchissement du seul graphique actif
+  toutes `ui.chart_refresh_seconds` (config.yaml, défaut 5 s).
+  **Données factices déterministes** (seed symbole+minute) servies par
+  `/api/charts/price-history` et `/api/positions` — le câblage broker
+  réel ne remplacera que les fonctions `_demo_*` d'`api_rest.py`.
 - Téléchargeur d'historique M1 Dukascopy opérationnel côté code
   (`download_history.py` + `pyea/data/data_history_downloader.py`,
   31 instruments dans `config.yaml:history`, Parquet par symbole/année
@@ -173,3 +182,13 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
   README (trop technique) devient présentation + « Démarrage rapide » ;
   la doc technique part dans `docs/` (architecture, données historiques,
   choix techniques).
+- **2026-07-18** — Dashboard refondu sur maquette TradingView fournie par
+  l'utilisateur (graphique central, watchlist-onglets à droite avec état
+  de trading, positions en bas, P&L total en bas à droite, switch
+  Live/Backtest en haut à droite). Ajouts en conséquence :
+  `strategy.symbols` et `ui.chart_refresh_seconds` dans config.yaml,
+  endpoints `/api/symbols` et `/api/positions`, page `/backtest`
+  placeholder, vendorisation de luxon + chartjs-adapter-luxon +
+  chartjs-chart-financial (chandeliers). Les logs restent accessibles
+  (onglet du panneau bas). Tout le factice est concentré dans les
+  fonctions `_demo_*` d'`api_rest.py`, à remplacer au câblage réel.

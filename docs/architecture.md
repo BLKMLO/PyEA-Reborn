@@ -46,15 +46,17 @@ PyEA-Reborn/
 │   │   └── storage_database.py            # Moteur/sessions ; SQLite → Postgres via database_url.
 │   │
 │   ├── api/
-│   │   ├── api_pages.py                   # Pages HTML (Jinja2 + HTMX).
-│   │   ├── api_rest.py                    # REST : statut, logs, données de graphiques (/api/*).
+│   │   ├── api_pages.py                   # Pages HTML : / (live) et /backtest (Jinja2 + HTMX).
+│   │   ├── api_rest.py                    # REST : status, symbols, positions, logs, charts (/api/*).
 │   │   └── api_websocket.py               # WebSocket /ws : relais du bus vers les navigateurs.
 │   │
 │   └── web/
-│       ├── templates/                     # base.html, dashboard.html.
+│       ├── templates/                     # base.html (header + switch Live/Backtest),
+│       │                                  # dashboard.html (live), backtest.html (placeholder).
 │       └── static/
-│           ├── js/charts.js               # Initialisation Chart.js (jamais inline dans les templates).
-│           └── vendor/                    # Tailwind, HTMX, Chart.js servis en local (pas de CDN).
+│           ├── js/charts.js               # Logique du dashboard : graphique, watchlist, positions.
+│           └── vendor/                    # Tailwind, HTMX, Chart.js (+ luxon, adaptateur,
+│                                          # chartjs-chart-financial pour les chandeliers) — local, pas de CDN.
 │
 ├── docs/                                  # Cette documentation.
 └── tests/                                 # Structure miroir de pyea/ (un dossier par package).
