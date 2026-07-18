@@ -22,6 +22,49 @@ risk:
   max_daily_loss_pct: 2.0
   max_open_positions: 1
 
+history:
+  # Données historiques M1 (Dukascopy) pour le backtest — voir
+  # download_history.py. Année de départ réglable (2010 = défaut voulu).
+  data_dir: "./data/history"
+  start_year: 2010
+  instruments:
+    # Majeures
+    - EURUSD
+    - GBPUSD
+    - USDJPY
+    - USDCHF
+    - USDCAD
+    - AUDUSD
+    - NZDUSD
+    # Croisées EUR
+    - EURGBP
+    - EURJPY
+    - EURCHF
+    - EURAUD
+    - EURCAD
+    - EURNZD
+    # Croisées GBP
+    - GBPJPY
+    - GBPCHF
+    - GBPAUD
+    - GBPCAD
+    - GBPNZD
+    # Autres croisées
+    - AUDJPY
+    - AUDCHF
+    - AUDCAD
+    - AUDNZD
+    - NZDJPY
+    - NZDCHF
+    - NZDCAD
+    - CADJPY
+    - CADCHF
+    - CHFJPY
+    # Métaux & indices
+    - XAUUSD
+    - XAGUSD
+    - US500
+
 storage:
   # URL SQLAlchemy — remplacer par postgresql+psycopg://... pour migrer.
   database_url: "sqlite:///./data/pyea.db"

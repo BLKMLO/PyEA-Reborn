@@ -17,7 +17,9 @@
 ## Commandes
 
 ```bash
-python run_server.py        # seule commande CLI : démarre le serveur web
+python run_server.py        # commande CLI principale : démarre le serveur web
+python download_history.py  # EXCEPTION assumée : téléchargement ponctuel de
+                            # l'historique M1 (Dukascopy) pour le backtest
 pytest                      # tests (structure miroir dans tests/)
 ```
 
@@ -56,7 +58,15 @@ jamais commité — modèle dans `.env.example`).
 
 - Échafaudage complet et fonctionnel : serveur web, dashboard
   (statut + graphique factice + logs), REST + WebSocket, registres
-  stratégie/broker, SQLAlchemy (SQLite), 6 tests fumée verts.
+  stratégie/broker, SQLAlchemy (SQLite), 11 tests verts.
+- Téléchargeur d'historique M1 Dukascopy opérationnel côté code
+  (`download_history.py` + `pyea/data/data_history_downloader.py`,
+  31 instruments dans `config.yaml:history`, Parquet par symbole/année
+  dans `data/history/`) — **pas encore validé contre le flux réel**
+  (réseau sortant bloqué dans la sandbox de dev) : au premier lancement
+  chez l'utilisateur, vérifier les prix logués (facteurs décimaux) .
+- Interface de backtest : à venir ; elle lira les Parquet via
+  `data_history_downloader.load_history()`.
 - **Squelettes vides** (NotImplementedError) à développer plus tard :
   logique LightGBM de `CouleuvreV01` (warmup/on_tick), `RiskManager.evaluate`,
   `InteractiveBrokersGateway` (appels ib_async réels), `MarketDataFeed`.
@@ -78,3 +88,13 @@ jamais commité — modèle dans `.env.example`).
 - **2026-07-18** — Ce fichier `CLAUDE.md` devient la mémoire maintenue du
   projet, sur demande de l'utilisateur : le mettre à jour après chaque
   changement notable et s'y référer plutôt qu'au contexte de conversation.
+- **2026-07-18** — Données historiques pour le backtest : source
+  **Dukascopy** (flux public `datafeed.dukascopy.com`, gratuit, sans
+  compte, M1 remontant avant 2010) retenue contre IB (exige TWS connecté
+  + limites de débit) et yfinance (pas d'intraday ancien). Granularité
+  **M1** stockée en **Parquet** (le backtest ré-échantillonnera H1/D1 au
+  besoin). `download_history.py` = 2e commande CLI, exception assumée à
+  la règle « une seule commande » (tâche ponctuelle de plusieurs heures,
+  hors cycle de vie du serveur). Pièges du flux notés dans le module :
+  mois 0-based dans les URLs, prix entiers ÷ 10^facteur (5 forex, 3
+  paires JPY/métaux/indices), 404 = week-end/férié/hors historique.

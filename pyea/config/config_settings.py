@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     risk_max_position_size: int = 1
     risk_max_daily_loss_pct: float = 2.0
     risk_max_open_positions: int = 1
+    history_data_dir: str = "./data/history"
+    history_start_year: int = 2010
+    history_instruments: list[str] = ["EURUSD"]
     database_url: str = "sqlite:///./data/pyea.db"
     log_level: str = "INFO"
     log_file: str = "./logs/pyea.log"
@@ -71,6 +74,7 @@ def _yaml_overrides(raw: dict[str, Any]) -> dict[str, Any]:
     broker = raw.get("broker", {})
     strategy = raw.get("strategy", {})
     risk = raw.get("risk", {})
+    history = raw.get("history", {})
     storage = raw.get("storage", {})
     logging_cfg = raw.get("logging", {})
 
@@ -84,6 +88,9 @@ def _yaml_overrides(raw: dict[str, Any]) -> dict[str, Any]:
         "risk_max_position_size": risk.get("max_position_size"),
         "risk_max_daily_loss_pct": risk.get("max_daily_loss_pct"),
         "risk_max_open_positions": risk.get("max_open_positions"),
+        "history_data_dir": history.get("data_dir"),
+        "history_start_year": history.get("start_year"),
+        "history_instruments": history.get("instruments"),
         "database_url": storage.get("database_url"),
         "log_level": logging_cfg.get("level"),
         "log_file": logging_cfg.get("file"),

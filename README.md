@@ -27,7 +27,8 @@ de la stratégie, graphiques, logs, statut broker) se pilote depuis le web.
 
 ```
 PyEA-Reborn/
-├── run_server.py                          # Point d'entrée CLI unique : démarre le serveur web.
+├── run_server.py                          # Point d'entrée CLI principal : démarre le serveur web.
+├── download_history.py                    # CLI ponctuel (exception) : historique M1 pour le backtest.
 ├── config.yaml                            # Paramètres fonctionnels versionnés (stratégie, risque, storage).
 ├── .env.example                           # Modèle des secrets (.env réel jamais commité).
 ├── requirements.txt
@@ -44,7 +45,8 @@ PyEA-Reborn/
 │   │   └── core_events.py                 # Bus pub/sub asynchrone (ticks, signaux, statut, logs).
 │   │
 │   ├── data/
-│   │   └── data_market_feed.py            # Ingestion : ticks broker → bus d'événements.
+│   │   ├── data_market_feed.py            # Ingestion : ticks broker → bus d'événements.
+│   │   └── data_history_downloader.py     # Historique M1 Dukascopy → Parquet (+ load_history()).
 │   │
 │   ├── strategies/
 │   │   ├── strategy_base.py               # Contrat abstrait Strategy (warmup / on_tick / shutdown).
@@ -99,6 +101,25 @@ PyEA-Reborn/
 | Nouveau graphique | Endpoint JSON dans `api_rest.py` + init dans `static/js/charts.js` + canvas dans le template | — |
 | Nouvelle table | `storage/storage_models.py` | Le reste du storage |
 | Nouveau paramètre | `config.yaml` (fonctionnel) ou `.env.example` (secret) + champ dans `config_settings.py` | Lectures directes d'env ailleurs — interdites |
+
+## Données historiques (backtest)
+
+```bash
+python download_history.py                          # tout config.yaml (history.*)
+python download_history.py --symbols EURUSD XAUUSD --start-year 2015
+```
+
+Télécharge les bougies **M1 bid/ask** depuis le flux public Dukascopy
+(gratuit, sans compte) pour les 31 instruments de `config.yaml:history`
+(majeures, croisées, XAUUSD/XAGUSD, US500), depuis `history.start_year`
+(2010 par défaut, réglable). Stockage :
+`data/history/<SYMBOLE>/<SYMBOLE>_m1_<année>.parquet` — relu par la
+future interface de backtest via `load_history()`. Le téléchargement est
+**incrémental** (les années déjà présentes sont sautées ; `--force` pour
+re-télécharger). Un run complet représente des centaines de milliers de
+petits fichiers côté serveur : comptez plusieurs heures et ~10-20 Go.
+Note : l'historique des indices (US500) démarre souvent après 2010 chez
+Dukascopy ; les années absentes sont simplement signalées et sautées.
 
 ## Règles d'architecture
 
