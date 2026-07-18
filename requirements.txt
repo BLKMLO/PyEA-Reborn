@@ -1,0 +1,25 @@
+# Backend web
+fastapi>=0.115
+uvicorn[standard]>=0.30
+jinja2>=3.1
+
+# Configuration
+pydantic-settings>=2.4
+PyYAML>=6.0
+
+# Stockage (SQLite au départ, Postgres plus tard sans réécriture)
+SQLAlchemy>=2.0
+
+# Broker Interactive Brokers (fork communautaire maintenu d'ib_insync)
+ib_async>=1.0
+
+# Stratégie (Couleuvre_v0.1 — logique développée plus tard)
+lightgbm>=4.3
+
+# Données historiques (download_history.py) & backtest
+pandas>=2.2
+pyarrow>=16.0
+
+# Tests
+pytest>=8.0
+httpx>=0.27
