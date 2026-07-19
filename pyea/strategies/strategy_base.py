@@ -10,6 +10,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
+import pandas as pd
+
 from pyea.core.core_domain import Signal, TickData
 
 
@@ -32,6 +34,16 @@ class Strategy(ABC):
     @abstractmethod
     async def shutdown(self) -> None:
         """Libère proprement les ressources (modèle, buffers)."""
+
+    async def train(self, frame: pd.DataFrame, params: dict[str, Any]) -> dict[str, Any] | None:
+        """Entraîne la stratégie sur un historique (un pli du walk-forward).
+
+        Optionnel : les stratégies non entraînables gardent ce défaut et
+        retournent ``None``. Une stratégie ML (Couleuvre) retournera ses
+        artefacts (chemin du modèle, métriques d'entraînement…), que le
+        walk-forward archive dans ``data/models/``.
+        """
+        return None
 
     def describe(self) -> dict[str, str]:
         """Métadonnées affichées sur le dashboard."""

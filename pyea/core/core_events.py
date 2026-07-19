@@ -19,6 +19,7 @@ TOPIC_TICK = "market.tick"
 TOPIC_SIGNAL = "strategy.signal"
 TOPIC_EA_STATUS = "ea.status"
 TOPIC_LOG = "log.line"
+TOPIC_TRAINING_PROGRESS = "training.progress"
 
 
 class EventBus:

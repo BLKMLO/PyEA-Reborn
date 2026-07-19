@@ -40,6 +40,19 @@ développe le raisonnement pour celles qui structurent le projet.
   TradingView affiché sur le graphique est l'attribution requise par la
   licence Apache 2.0 — ne pas le retirer.
 
+- **Entraînement : jobs en thread + progression via le bus d'événements**
+  (plutôt que Celery/RQ/Redis, ou une requête HTTP bloquante) : un
+  walk-forward LightGBM durera des minutes — il tourne dans un thread
+  dédié (`training_jobs.py`), publie sa progression sur le bus (topic
+  `training.progress`) que le WebSocket relaie déjà, et reste
+  interrogeable/annulable par REST (`/api/training/jobs/{id}`). Une file
+  distribuée n'apporterait rien à un EA mono-utilisateur local et
+  casserait le principe « zéro infra ». Un seul job à la fois (un
+  entraînement sature déjà un cœur). Chaque run est historisé en SQLite
+  (`training_runs`) avec ses métriques out-of-sample et ses artefacts
+  (`data/models/<run>/`) — sans historique comparable, impossible de
+  savoir si un modèle progresse.
+
 - **Dukascopy comme source d'historique** (plutôt qu'IB ou yfinance) :
   flux public gratuit sans compte, M1 remontant avant 2010 sur le forex ;
   IB exige TWS connecté et impose des limites de débit sévères sur

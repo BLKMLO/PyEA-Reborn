@@ -75,6 +75,9 @@ history:
 storage:
   # URL SQLAlchemy — remplacer par postgresql+psycopg://... pour migrer.
   database_url: "sqlite:///./data/pyea.db"
+  # Artefacts d'entraînement (metadata.json, modèles LightGBM à venir) :
+  # un sous-dossier par run — data/models/<strategie>-<horodatage>/.
+  models_dir: "./data/models"
 
 logging:
   level: "INFO"

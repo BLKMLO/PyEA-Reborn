@@ -138,9 +138,28 @@ jamais commité — modèle dans `.env.example`).
   fixe `risk.max_position_size` refusées au-delà de
   `risk.max_open_positions`. À enrichir : perte journalière max,
   kill-switch, sizing dynamique.
+- **Infra d'entraînement opérationnelle** (page backtest, section
+  « Entraînement ») : walk-forward à fenêtre expansive
+  (`pyea/training/training_walkforward.py`, plis de test consécutifs,
+  jamais de split aléatoire), exécution en **job de thread**
+  (`training_jobs.py`, un seul job actif à la fois, annulable),
+  progression **temps réel** via bus topic `training.progress` → WebSocket
+  (+ polling `GET /api/training/jobs/{id}` en secours). Chaque run est
+  historisé en SQLite (table `training_runs` : params, métriques OOS,
+  statut) avec artefacts dans `data/models/<run>/` (metadata.json ;
+  `model.txt` LightGBM viendra). Hook `Strategy.train(frame, params)`
+  ajouté au contrat (défaut no-op = stratégie non entraînable). L'UI
+  met en avant l'**out-of-sample** (l'in-sample surestime toujours).
+- **Spécification de Couleuvre v0.1** fournie par l'utilisateur :
+  `docs/strategie_couleuvre.md` (swing intra-semaine 2-5 j, triple
+  barrier ATR, features prix/tendance/momentum/vol/calendrier, un modèle
+  par actif). Annotations importantes : clôture forcée du vendredi et
+  barrières intrabar = **pré-requis moteur avant d'entraîner** ; volume
+  forex Dukascopy = volume de ticks ; crypto/actions hors scope actuel.
 - **Squelettes vides** (NotImplementedError) à développer plus tard :
-  logique LightGBM de `CouleuvreV01` (warmup/on_tick),
-  `InteractiveBrokersGateway` (appels ib_async réels), `MarketDataFeed`.
+  logique LightGBM de `CouleuvreV01` (train/warmup/on_tick — spec dans
+  docs/strategie_couleuvre.md), `InteractiveBrokersGateway` (appels
+  ib_async réels), `MarketDataFeed`.
 
 ## Points de vigilance (audit modularité 2026-07-18)
 
@@ -249,3 +268,19 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
   Validation navigateur sur historique synthétique local (Dukascopy
   bloqué en sandbox) : 18 mois M1 → H1 en ~15 s, 0 trade (stratégie
   muette), zéro erreur console.
+- **2026-07-19** — Infra d'entraînement (direction validée par
+  l'utilisateur avant toute ligne de LightGBM). Décisions : **jobs en
+  thread + progression par le bus** (Celery/Redis rejeté : EA
+  mono-utilisateur local, zéro infra) ; un seul job à la fois ;
+  `strategy.train()` ajouté au contrat avec défaut no-op ; artefacts par
+  run dans `data/models/<run>/` (`storage.models_dir` en config) ; table
+  `training_runs` pour comparer les runs ; le walk-forward teste chaque
+  pli via le MÊME `BacktestEngine` que la page backtest. Le bus
+  d'événements sert enfin à quelque chose (point de vigilance n°1 —
+  `job_manager` est d'ailleurs un singleton de module du même statut).
+  Ébauche de features utilisateur consignée et annotée dans
+  `docs/strategie_couleuvre.md` — deux évolutions moteur identifiées
+  comme PRÉ-REQUIS avant l'entraînement réel : clôture forcée avant le
+  week-end et barrières TP/SL intrabar (triple-barrier). Validation
+  navigateur : run 5 plis, 11 trames WS `training.progress`, historique
+  persistant, zéro erreur console.

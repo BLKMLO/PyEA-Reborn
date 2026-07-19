@@ -17,6 +17,7 @@ from pyea.core.core_events import (
     TOPIC_LOG,
     TOPIC_SIGNAL,
     TOPIC_TICK,
+    TOPIC_TRAINING_PROGRESS,
     event_bus,
 )
 from pyea.core.core_logging import get_logger
@@ -24,7 +25,13 @@ from pyea.core.core_logging import get_logger
 logger = get_logger(__name__)
 router = APIRouter(tags=["websocket"])
 
-RELAYED_TOPICS = (TOPIC_TICK, TOPIC_SIGNAL, TOPIC_EA_STATUS, TOPIC_LOG)
+RELAYED_TOPICS = (
+    TOPIC_TICK,
+    TOPIC_SIGNAL,
+    TOPIC_EA_STATUS,
+    TOPIC_LOG,
+    TOPIC_TRAINING_PROGRESS,
+)
 
 
 class ConnectionManager:

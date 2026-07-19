@@ -13,7 +13,8 @@ un plugin parmi d'autres possibles.
 - Architecture modulaire : brokers et stratégies interchangeables par
   contrat, risk management obligatoire sur le chemin des ordres.
 - Données historiques M1 (31 instruments : forex, métaux, indices),
-  ré-échantillonnage multi-timeframes et interface de backtest intégrée.
+  ré-échantillonnage multi-timeframes, backtest et entraînement
+  walk-forward intégrés.
 
 ## 🚀 Démarrage rapide
 

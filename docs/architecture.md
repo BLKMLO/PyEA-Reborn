@@ -42,19 +42,25 @@ PyEA-Reborn/
 │   │   └── backtest_engine.py             # Rejoue l'historique via le flux complet
 │   │                                      # Strategy → RiskManager → ordre simulé.
 │   │
+│   ├── training/
+│   │   ├── training_walkforward.py        # Découpe walk-forward + orchestration train/test.
+│   │   └── training_jobs.py               # Jobs en thread, progression → bus → WebSocket.
+│   │
 │   ├── brokers/
 │   │   ├── broker_gateway.py              # Contrat générique BrokerGateway + registre.
 │   │   └── broker_interactive_brokers.py  # 1re implémentation (ib_async). Suivant : broker_<nom>.py.
 │   │
 │   ├── storage/
-│   │   ├── storage_models.py              # Modèles SQLAlchemy (signals, trades, états de trading).
+│   │   ├── storage_models.py              # Modèles SQLAlchemy (signals, trades, états, runs).
 │   │   ├── storage_database.py            # Moteur/sessions ; SQLite → Postgres via database_url.
-│   │   └── storage_trading_state.py       # Interrupteur Trading/Stopped par symbole (persisté).
+│   │   ├── storage_trading_state.py       # Interrupteur Trading/Stopped par symbole (persisté).
+│   │   └── storage_training_runs.py       # Historique des entraînements (métriques OOS, artefacts).
 │   │
 │   ├── api/
 │   │   ├── api_pages.py                   # Pages HTML : / (live) et /backtest (Jinja2 + HTMX).
 │   │   ├── api_rest.py                    # REST : status, symbols, trading/{symbol}, positions, logs, charts.
 │   │   ├── api_backtest.py                # REST : /api/backtest/datasets et /api/backtest/run.
+│   │   ├── api_training.py                # REST : /api/training/run, jobs/{id}, runs.
 │   │   └── api_websocket.py               # WebSocket /ws : relais du bus vers les navigateurs.
 │   │
 │   └── web/

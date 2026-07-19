@@ -138,9 +138,136 @@ function renderResults(result) {
     : `<tr><td colspan="7" class="py-2 text-slate-500">Aucun trade — la stratégie n'a émis aucun signal sur la période.</td></tr>`;
 }
 
+// --- Entraînement walk-forward ---------------------------------------------
+// POST /api/training/run → job en arrière-plan. Progression en temps réel
+// par le WebSocket (topic training.progress) + polling de secours.
+
+let currentJobId = null;
+let pollTimer = null;
+
+function setProgress(payload) {
+  const wrap = document.getElementById("tr-progress-wrap");
+  wrap.classList.remove("hidden");
+  const percent = payload.total
+    ? Math.round(((payload.fold - (payload.phase === "train" ? 1 : 0.5)) / payload.total) * 100)
+    : 100;
+  document.getElementById("tr-progress-bar").style.width = `${Math.max(2, percent)}%`;
+  document.getElementById("tr-progress-text").textContent = payload.message || payload.phase || "";
+}
+
+function initTrainingWebSocket() {
+  const ws = new WebSocket(`ws://${window.location.host}/ws`);
+  ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    if (data.topic === "training.progress" && data.payload.job_id === currentJobId) {
+      setProgress(data.payload);
+    }
+  };
+}
+
+async function runTraining() {
+  const button = document.getElementById("tr-run");
+  const message = document.getElementById("tr-message");
+  button.disabled = true;
+  message.textContent = "";
+  document.getElementById("tr-results").classList.add("hidden");
+  const body = {
+    symbol: document.getElementById("bt-symbol").value,
+    timeframe: document.getElementById("bt-timeframe").value,
+    strategy: document.getElementById("bt-strategy").value,
+    folds: parseInt(document.getElementById("tr-folds").value, 10) || 4,
+  };
+  const start = document.getElementById("bt-start").value;
+  const end = document.getElementById("bt-end").value;
+  if (start) body.start = start;
+  if (end) body.end = end;
+
+  const response = await fetch("/api/training/run", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    message.textContent = `Erreur : ${(await response.json()).detail}`;
+    button.disabled = false;
+    return;
+  }
+  currentJobId = (await response.json()).job_id;
+  setProgress({ message: "Démarrage…" });
+  pollTimer = setInterval(pollJob, 2000);
+}
+
+async function pollJob() {
+  const response = await fetch(`/api/training/jobs/${currentJobId}`);
+  if (!response.ok) return;
+  const job = await response.json();
+  if (job.status === "running") return;
+  clearInterval(pollTimer);
+  document.getElementById("tr-run").disabled = false;
+  document.getElementById("tr-progress-wrap").classList.add("hidden");
+  const message = document.getElementById("tr-message");
+  if (job.status === "completed") {
+    message.textContent = "";
+    renderTraining(job.result);
+  } else if (job.status === "cancelled") {
+    message.textContent = "Entraînement annulé.";
+  } else {
+    message.textContent = `Échec : ${job.error}`;
+  }
+  loadRuns();
+}
+
+async function cancelTraining() {
+  if (currentJobId) await fetch(`/api/training/jobs/${currentJobId}`, { method: "DELETE" });
+}
+
+function renderTraining(report) {
+  const stats = report.oos_stats;
+  document.getElementById("tr-results").classList.remove("hidden");
+  document.getElementById("tr-stats").innerHTML =
+    statCard("Trades OOS", stats.trades) +
+    statCard("P&L OOS", stats.total_pnl, true) +
+    statCard("Taux de gain OOS", stats.win_rate === null ? null : `${(stats.win_rate * 100).toFixed(1)} %`) +
+    statCard("Drawdown max OOS", stats.max_drawdown);
+  document.getElementById("tr-folds-body").innerHTML = report.folds.map(fold => `
+    <tr class="border-t border-slate-700/60">
+      <td class="py-1 pr-2">${fold.index}</td>
+      <td class="pr-2">${fold.train_bars}</td>
+      <td class="pr-2">${fold.test_start.slice(0, 10)} → ${fold.test_end.slice(0, 10)}</td>
+      <td class="pr-2">${fold.test_stats.trades}</td>
+      <td class="pr-2 ${fold.test_stats.total_pnl >= 0 ? "text-emerald-400" : "text-red-400"}">${fold.test_stats.total_pnl}</td>
+      <td class="pr-2">${fold.test_stats.win_rate === null ? "—" : (fold.test_stats.win_rate * 100).toFixed(1) + " %"}</td>
+      <td>${fold.test_stats.max_drawdown}</td>
+    </tr>`).join("");
+}
+
+async function loadRuns() {
+  const response = await fetch("/api/training/runs");
+  if (!response.ok) return;
+  const data = await response.json();
+  document.getElementById("tr-runs-body").innerHTML = data.runs.length
+    ? data.runs.map(run => `
+        <tr class="border-t border-slate-700/60 ${run.status !== "completed" ? "text-slate-500" : ""}">
+          <td class="py-1 pr-2 font-mono">${run.id}</td>
+          <td class="pr-2">${run.created_at.slice(0, 16).replace("T", " ")}</td>
+          <td class="pr-2">${run.symbol}</td>
+          <td class="pr-2">${run.timeframe}</td>
+          <td class="pr-2">${run.folds}</td>
+          <td class="pr-2">${run.status}</td>
+          <td class="pr-2">${run.oos_trades ?? "—"}</td>
+          <td class="pr-2">${run.oos_pnl ?? "—"}</td>
+          <td>${run.oos_win_rate === null || run.oos_win_rate === undefined ? "—" : (run.oos_win_rate * 100).toFixed(1) + " %"}</td>
+        </tr>`).join("")
+    : `<tr><td colspan="9" class="py-2 text-slate-500">Aucun entraînement pour l'instant.</td></tr>`;
+}
+
 // --- Init ------------------------------------------------------------------
 
 document.addEventListener("DOMContentLoaded", () => {
   loadDatasets();
+  loadRuns();
+  initTrainingWebSocket();
   document.getElementById("bt-run").addEventListener("click", runBacktest);
+  document.getElementById("tr-run").addEventListener("click", runTraining);
+  document.getElementById("tr-cancel").addEventListener("click", cancelTraining);
 });

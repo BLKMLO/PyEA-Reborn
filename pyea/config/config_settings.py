@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     history_start_year: int = 2010
     history_instruments: list[str] = ["EURUSD"]
     database_url: str = "sqlite:///./data/pyea.db"
+    models_dir: str = "./data/models"
     log_level: str = "INFO"
     log_file: str = "./logs/pyea.log"
     log_web_buffer_size: int = 500
@@ -95,6 +96,7 @@ def _yaml_overrides(raw: dict[str, Any]) -> dict[str, Any]:
         "history_start_year": history.get("start_year"),
         "history_instruments": history.get("instruments"),
         "database_url": storage.get("database_url"),
+        "models_dir": storage.get("models_dir"),
         "log_level": logging_cfg.get("level"),
         "log_file": logging_cfg.get("file"),
         "log_web_buffer_size": logging_cfg.get("web_buffer_size"),

@@ -30,6 +30,27 @@ class SymbolTradingState(Base):
     )
 
 
+class TrainingRun(Base):
+    """Un entraînement walk-forward : paramètres, métriques out-of-sample
+    et chemin des artefacts. C'est ce qui permet de comparer deux runs."""
+
+    __tablename__ = "training_runs"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    strategy_name: Mapped[str] = mapped_column(String(64))
+    symbol: Mapped[str] = mapped_column(String(32))
+    timeframe: Mapped[str] = mapped_column(String(8))
+    params_json: Mapped[str] = mapped_column(String(2048), default="{}")
+    folds: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(16), default="running")
+    oos_trades: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    oos_pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
+    oos_win_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    oos_max_drawdown: Mapped[float | None] = mapped_column(Float, nullable=True)
+    artifacts_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
+
 class SignalRecord(Base):
     """Signal émis par une stratégie (accepté ou non par le risk management)."""
 
