@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     trading_mode: Literal["paper", "live"] = "paper"
     strategy_name: str = "couleuvre_v0_1"
     strategy_enabled: bool = False
+    strategy_symbols: list[str] = ["EURUSD"]
+    ui_chart_refresh_seconds: int = 5
     risk_max_position_size: int = 1
     risk_max_daily_loss_pct: float = 2.0
     risk_max_open_positions: int = 1
@@ -74,6 +76,7 @@ def _yaml_overrides(raw: dict[str, Any]) -> dict[str, Any]:
     broker = raw.get("broker", {})
     strategy = raw.get("strategy", {})
     risk = raw.get("risk", {})
+    ui = raw.get("ui", {})
     history = raw.get("history", {})
     storage = raw.get("storage", {})
     logging_cfg = raw.get("logging", {})
@@ -85,6 +88,8 @@ def _yaml_overrides(raw: dict[str, Any]) -> dict[str, Any]:
         "trading_mode": broker.get("trading_mode"),
         "strategy_name": strategy.get("name"),
         "strategy_enabled": strategy.get("enabled"),
+        "strategy_symbols": strategy.get("symbols"),
+        "ui_chart_refresh_seconds": ui.get("chart_refresh_seconds"),
         "risk_max_position_size": risk.get("max_position_size"),
         "risk_max_daily_loss_pct": risk.get("max_daily_loss_pct"),
         "risk_max_open_positions": risk.get("max_open_positions"),

@@ -1,4 +1,8 @@
-"""Routes des pages HTML (templates Jinja2 + HTMX)."""
+"""Routes des pages HTML (templates Jinja2 + HTMX).
+
+La variable de contexte ``page`` alimente le sélecteur Live/Backtest du
+header (base.html).
+"""
 
 from __future__ import annotations
 
@@ -16,4 +20,9 @@ templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
 @router.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request, "dashboard.html")
+    return templates.TemplateResponse(request, "dashboard.html", {"page": "live"})
+
+
+@router.get("/backtest", response_class=HTMLResponse)
+async def backtest(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request, "backtest.html", {"page": "backtest"})

@@ -4,22 +4,31 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}PyEA{% endblock %}</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🐍</text></svg>">
   <!-- Libs servies en local (static/vendor) : le dashboard doit fonctionner
        sans accès internet (VPS de trading). Tailwind = style uniquement. -->
   <script src="/static/vendor/tailwind.js"></script>
   <script src="/static/vendor/htmx.min.js"></script>
   {% block head %}{% endblock %}
 </head>
-<body class="h-full bg-slate-900 text-slate-100">
-  <header class="border-b border-slate-700 bg-slate-800 px-6 py-4">
-    <div class="flex items-center justify-between">
-      <h1 class="text-xl font-semibold tracking-wide">🐍 PyEA</h1>
-      <span id="ws-status" class="text-sm text-slate-400">WebSocket : déconnecté</span>
-    </div>
-  </header>
-  <main class="mx-auto max-w-6xl p-6">
+<body class="h-full overflow-hidden bg-slate-900 text-slate-100">
+  <div class="flex h-full flex-col">
+    <header class="flex items-center justify-between border-b border-slate-700 bg-slate-800 px-4 py-2">
+      <div class="flex items-center gap-4">
+        <h1 class="text-lg font-semibold tracking-wide">🐍 PyEA</h1>
+        <span id="header-status" class="text-xs text-slate-400"></span>
+      </div>
+      <div class="flex items-center gap-4">
+        <span id="ws-status" class="text-xs text-slate-500">WS : déconnecté</span>
+        <!-- Sélecteur d'interface : Live | Backtest -->
+        <nav class="flex overflow-hidden rounded-md border border-slate-600 text-sm">
+          <a href="/" class="px-3 py-1 {% if page == 'live' %}bg-emerald-600 text-white{% else %}bg-slate-700 text-slate-300 hover:bg-slate-600{% endif %}">Live</a>
+          <a href="/backtest" class="px-3 py-1 {% if page == 'backtest' %}bg-emerald-600 text-white{% else %}bg-slate-700 text-slate-300 hover:bg-slate-600{% endif %}">Backtest</a>
+        </nav>
+      </div>
+    </header>
     {% block content %}{% endblock %}
-  </main>
+  </div>
   {% block scripts %}{% endblock %}
 </body>
 </html>

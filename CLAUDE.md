@@ -51,11 +51,14 @@ jamais commité — modèle dans `.env.example`).
   + import dans `strategies/__init__.py`. Nouveau broker : idem avec
   `brokers/broker_<nom>.py` + `@register_gateway`.
 - Tests : `tests/<package>/test_<module>.py`, miroir strict du source.
-- Graphiques : init Chart.js uniquement dans `pyea/web/static/js/charts.js`,
-  données via endpoints JSON `/api/charts/*`.
-- Libs front (Tailwind, HTMX, Chart.js) **vendorisées** dans
-  `pyea/web/static/vendor/` — jamais de CDN au runtime (le dashboard doit
-  marcher sur un VPS sans internet sortant).
+- Graphiques : init uniquement dans `pyea/web/static/js/charts.js`,
+  données via endpoints JSON `/api/charts/*`. Graphique de prix =
+  TradingView Lightweight Charts (chandeliers, pan/zoom, historique
+  paginé) ; Chart.js réservé aux futurs graphiques classiques (P&L,
+  distributions).
+- Libs front (Tailwind, HTMX, Lightweight Charts, Chart.js)
+  **vendorisées** dans `pyea/web/static/vendor/` — jamais de CDN au
+  runtime (le dashboard doit marcher sur un VPS sans internet sortant).
 
 ## Données historiques (backtest)
 
@@ -95,9 +98,20 @@ jamais commité — modèle dans `.env.example`).
 
 ## État du projet
 
-- Échafaudage complet et fonctionnel : serveur web, dashboard
-  (statut + graphique factice + logs), REST + WebSocket, registres
-  stratégie/broker, SQLAlchemy (SQLite), 11 tests verts.
+- Échafaudage complet et fonctionnel : serveur web, REST + WebSocket,
+  registres stratégie/broker, SQLAlchemy (SQLite), 21 tests verts.
+- Dashboard live façon TradingView : chandeliers M1 au centre
+  (**TradingView Lightweight Charts** : pan/zoom natifs, historique
+  paginé via `?before=`, refresh incrémental `series.update` qui
+  préserve le défilement), watchlist à droite (clic = onglet, pastille
+  verte = « en trading » d'après `strategy.symbols` + `strategy.enabled`),
+  panneau bas Positions (fermées grisées, récentes en premier) / Logs,
+  P&L total en bas à droite, switch Live/Backtest dans le header
+  (`/backtest` = placeholder). Rafraîchissement du seul graphique actif
+  toutes `ui.chart_refresh_seconds` (config.yaml, défaut 5 s).
+  **Données factices déterministes** (seed symbole+minute) servies par
+  `/api/charts/price-history` et `/api/positions` — le câblage broker
+  réel ne remplacera que les fonctions `_demo_*` d'`api_rest.py`.
 - Téléchargeur d'historique M1 Dukascopy opérationnel côté code
   (`download_history.py` + `pyea/data/data_history_downloader.py`,
   31 instruments dans `config.yaml:history`, Parquet par symbole/année
@@ -109,6 +123,24 @@ jamais commité — modèle dans `.env.example`).
 - **Squelettes vides** (NotImplementedError) à développer plus tard :
   logique LightGBM de `CouleuvreV01` (warmup/on_tick), `RiskManager.evaluate`,
   `InteractiveBrokersGateway` (appels ib_async réels), `MarketDataFeed`.
+
+## Points de vigilance (audit modularité 2026-07-18)
+
+Le graphe d'imports est sain (aucun module métier n'importe `api/`,
+dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
+`config_settings.py`). Trois points à surveiller, pas à corriger :
+
+1. `event_bus` et `web_log_buffer` sont des singletons de module, pas
+   injectés par `create_app()` (incohérent avec `MarketDataFeed` qui
+   reçoit son bus). Si les tests exigent un jour des bus isolés, les
+   faire passer par `app_factory`.
+2. `/api/status` code en dur `broker_connected: False` — le vrai câblage
+   devra exposer la gateway via `app.state`, jamais par import direct
+   dans `api_rest`.
+3. Le `lifespan` de `app_factory` ne monte pas encore gateway + stratégie
+   + feed : c'est au premier câblage complet que le flux
+   `Signal → RiskManager → OrderRequest` devra être imposé (aucun
+   raccourci stratégie→broker, même « pour tester »).
 
 ## Journal de décisions
 
@@ -155,3 +187,24 @@ jamais commité — modèle dans `.env.example`).
   README (trop technique) devient présentation + « Démarrage rapide » ;
   la doc technique part dans `docs/` (architecture, données historiques,
   choix techniques).
+- **2026-07-18** — Dashboard refondu sur maquette TradingView fournie par
+  l'utilisateur (graphique central, watchlist-onglets à droite avec état
+  de trading, positions en bas, P&L total en bas à droite, switch
+  Live/Backtest en haut à droite). Ajouts en conséquence :
+  `strategy.symbols` et `ui.chart_refresh_seconds` dans config.yaml,
+  endpoints `/api/symbols` et `/api/positions`, page `/backtest`
+  placeholder, vendorisation de luxon + chartjs-adapter-luxon +
+  chartjs-chart-financial (chandeliers). Les logs restent accessibles
+  (onglet du panneau bas). Tout le factice est concentré dans les
+  fonctions `_demo_*` d'`api_rest.py`, à remplacer au câblage réel.
+- **2026-07-18** — Graphique de prix migré de Chart.js+chartjs-chart-financial
+  vers **TradingView Lightweight Charts 4.2.0** (vendorisé), suite à la
+  demande « remonter le graphique dans le passé ». Raisonnement : le
+  défilement est une capacité de la lib de graphique, pas du framework —
+  React/Vite rejeté (build imposé, contraire au principe zéro-build, sans
+  résoudre le besoin). Pagination `/api/charts/price-history?before=`
+  (secondes epoch), historique démo borné à 3 jours (`has_more`).
+  luxon + adaptateur + plugin financier supprimés du vendor ; Chart.js
+  conservé pour les futurs graphiques classiques. Le logo TradingView sur
+  le graphique = attribution obligatoire (licence Apache 2.0), ne pas
+  l'enlever.

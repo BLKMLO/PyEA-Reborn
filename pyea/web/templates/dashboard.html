@@ -1,33 +1,67 @@
 {% extends "base.html" %}
 
-{% block title %}Dashboard — PyEA{% endblock %}
+{% block title %}Live — PyEA{% endblock %}
 
 {% block head %}
-  <!-- Chart.js (local), uniquement sur les pages qui affichent des graphiques. -->
-  <script src="/static/vendor/chart.umd.min.js"></script>
+  <!-- TradingView Lightweight Charts (local) : chandeliers, pan/zoom,
+       historique paginé. Chart.js (vendor) reste disponible pour les
+       futurs graphiques classiques (P&L, distributions). -->
+  <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
 {% endblock %}
 
 {% block content %}
-  <!-- Statut de l'EA, rafraîchi périodiquement via HTMX. -->
-  <section class="mb-6 rounded-lg bg-slate-800 p-4"
-           hx-get="/api/status" hx-trigger="load, every 10s" hx-swap="none"
-           hx-on::after-request="document.getElementById('status-json').textContent = event.detail.xhr.responseText">
-    <h2 class="mb-2 text-lg font-medium">Statut</h2>
-    <pre id="status-json" class="overflow-x-auto text-sm text-slate-300">Chargement…</pre>
-  </section>
+  <div class="flex min-h-0 flex-1">
+    <!-- Graphique central -->
+    <main class="flex min-w-0 flex-1 flex-col p-3">
+      <div class="flex min-h-0 flex-1 flex-col rounded-lg bg-slate-800 p-3">
+        <div class="mb-2 flex items-center justify-between">
+          <h2 id="chart-title" class="text-base font-medium">—</h2>
+          <span id="chart-updated" class="text-xs text-slate-500"></span>
+        </div>
+        <div id="price-chart" class="relative min-h-0 flex-1"></div>
+      </div>
+    </main>
 
-  <!-- Graphique de prix (données factices pour l'instant). -->
-  <section class="mb-6 rounded-lg bg-slate-800 p-4">
-    <h2 class="mb-2 text-lg font-medium">Prix — DEMO</h2>
-    <canvas id="price-chart" class="max-h-96 w-full"></canvas>
-  </section>
+    <!-- Watchlist : un clic = un onglet -->
+    <aside class="flex w-56 flex-col border-l border-slate-700 bg-slate-800">
+      <div class="border-b border-slate-700 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+        Symboles
+      </div>
+      <ul id="symbol-list" class="min-h-0 flex-1 overflow-y-auto text-sm"></ul>
+      <div class="border-t border-slate-700 px-3 py-1.5 text-[11px] text-slate-500">
+        ● vert = en trading
+      </div>
+    </aside>
+  </div>
 
-  <!-- Derniers logs. -->
-  <section class="rounded-lg bg-slate-800 p-4"
-           hx-get="/api/logs?count=50" hx-trigger="load, every 15s" hx-swap="none"
-           hx-on::after-request="document.getElementById('log-lines').textContent = JSON.parse(event.detail.xhr.responseText).lines.join('\n')">
-    <h2 class="mb-2 text-lg font-medium">Logs</h2>
-    <pre id="log-lines" class="max-h-64 overflow-y-auto text-xs text-slate-400">Chargement…</pre>
+  <!-- Panneau bas : positions / logs + P&L total -->
+  <section class="flex h-56 shrink-0 border-t border-slate-700 bg-slate-800">
+    <div class="flex min-w-0 flex-1 flex-col">
+      <div class="flex items-center gap-1 border-b border-slate-700 px-3 pt-1.5">
+        <button data-tab="positions" class="bottom-tab rounded-t px-3 py-1 text-sm bg-slate-700">Positions</button>
+        <button data-tab="logs" class="bottom-tab rounded-t px-3 py-1 text-sm text-slate-400 hover:text-slate-200">Logs</button>
+      </div>
+      <div id="tab-positions" class="min-h-0 flex-1 overflow-y-auto px-3 py-2">
+        <table class="w-full text-left text-xs">
+          <thead class="sticky top-0 bg-slate-800 text-slate-400">
+            <tr>
+              <th class="py-1 pr-2">Symbole</th><th class="pr-2">Sens</th><th class="pr-2">Qté</th>
+              <th class="pr-2">Entrée</th><th class="pr-2">Prix</th><th class="pr-2">P&L</th><th>Statut</th>
+            </tr>
+          </thead>
+          <tbody id="positions-body"></tbody>
+        </table>
+      </div>
+      <div id="tab-logs" class="hidden min-h-0 flex-1 overflow-y-auto px-3 py-2">
+        <pre id="log-lines" class="text-[11px] leading-relaxed text-slate-400"></pre>
+      </div>
+    </div>
+    <!-- P&L total en bas à droite -->
+    <div class="flex w-56 flex-col items-center justify-center border-l border-slate-700">
+      <div class="text-xs uppercase tracking-wide text-slate-400">P&amp;L total</div>
+      <div id="total-pnl" class="mt-1 text-2xl font-semibold">—</div>
+      <div id="pnl-detail" class="mt-1 text-[11px] text-slate-500"></div>
+    </div>
   </section>
 {% endblock %}
 

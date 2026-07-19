@@ -28,6 +28,18 @@ développe le raisonnement pour celles qui structurent le projet.
   pas avec Chart.js, dont l'initialisation est centralisée dans
   `static/js/charts.js` et alimentée par `/api/charts/*`.
 
+- **TradingView Lightweight Charts pour le graphique de prix** (plutôt
+  qu'un plugin chandeliers pour Chart.js, ou une réécriture React) :
+  pan/zoom natifs, chargement paresseux de l'historique par pagination
+  (`/api/charts/price-history?before=`), mise à jour incrémentale
+  (`series.update`) qui préserve la position de défilement pendant le
+  refresh périodique. Le besoin était une capacité de la *librairie de
+  graphique*, pas du framework : React/Vite aurait imposé un build sans
+  résoudre le défilement. Chart.js reste vendorisé pour les futurs
+  graphiques classiques (courbe de P&L, distributions). Le logo
+  TradingView affiché sur le graphique est l'attribution requise par la
+  licence Apache 2.0 — ne pas le retirer.
+
 - **Dukascopy comme source d'historique** (plutôt qu'IB ou yfinance) :
   flux public gratuit sans compte, M1 remontant avant 2010 sur le forex ;
   IB exige TWS connecté et impose des limites de débit sévères sur
