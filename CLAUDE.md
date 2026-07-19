@@ -99,7 +99,7 @@ jamais commité — modèle dans `.env.example`).
 ## État du projet
 
 - Échafaudage complet et fonctionnel : serveur web, REST + WebSocket,
-  registres stratégie/broker, SQLAlchemy (SQLite), 21 tests verts.
+  registres stratégie/broker, SQLAlchemy (SQLite), 75 tests verts.
 - Dashboard live façon TradingView : chandeliers M1 au centre
   (**TradingView Lightweight Charts** : pan/zoom natifs, historique
   paginé via `?before=`, refresh incrémental `series.update` qui
