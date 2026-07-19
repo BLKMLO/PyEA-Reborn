@@ -122,10 +122,24 @@ jamais commité — modèle dans `.env.example`).
   dans `data/history/`) — **pas encore validé contre le flux réel**
   (réseau sortant bloqué dans la sandbox de dev) : au premier lancement
   chez l'utilisateur, vérifier les prix logués (facteurs décimaux) .
-- Interface de backtest : à venir ; elle lira les Parquet via
-  `data_history_downloader.load_history()`.
+- Interface de backtest opérationnelle (`/backtest`) : formulaire
+  (symbole/timeframe/stratégie/période, alimenté par
+  `/api/backtest/datasets` qui scanne `data/history/`), exécution via
+  `POST /api/backtest/run` (endpoint sync → threadpool FastAPI, ne bloque
+  pas le live), résultats = cartes stats (bougies, trades, P&L, taux de
+  gain, drawdown max), courbe d'équité (Chart.js) et table des trades.
+  Moteur : `pyea/backtest/backtest_engine.py` — rejoue bougie par bougie
+  via le flux complet `Strategy → Signal → RiskManager → OrderRequest`
+  (exécution simulée, modèle v1 : tick au bid_close, pas de spread ni
+  slippage, liquidation en fin de période, courbe d'équité ≤ 500 points).
+  Couleuvre étant muette, un run rend honnêtement 0 trade.
+- `RiskManager.evaluate` **v1 implémentée** (plus un squelette) : HOLD
+  ignoré, EXIT → ordre inverse de la position ouverte, entrées à taille
+  fixe `risk.max_position_size` refusées au-delà de
+  `risk.max_open_positions`. À enrichir : perte journalière max,
+  kill-switch, sizing dynamique.
 - **Squelettes vides** (NotImplementedError) à développer plus tard :
-  logique LightGBM de `CouleuvreV01` (warmup/on_tick), `RiskManager.evaluate`,
+  logique LightGBM de `CouleuvreV01` (warmup/on_tick),
   `InteractiveBrokersGateway` (appels ib_async réels), `MarketDataFeed`.
 
 ## Points de vigilance (audit modularité 2026-07-18)
@@ -223,3 +237,15 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
   changement d'onglet ; `window.confirm` avant d'armer en mode live.
   Bug démo corrigé au passage : `_base_price` classait USDJPY/USDCHF/
   USDCAD comme indices (`startswith("US")`).
+- **2026-07-19** — Interface de backtest (v1). Décisions : le moteur
+  (`pyea/backtest/`) passe par le MÊME flux que le live
+  (`Strategy → Signal → RiskManager → OrderRequest`, exécution simulée) —
+  c'est l'occasion qui a imposé le flux strict (point de vigilance n°3) et
+  motivé l'implémentation v1 de `RiskManager.evaluate`. Exécution
+  volontairement simple (bid_close, pas de spread/slippage) à raffiner.
+  Endpoint run en `def` sync (threadpool) pour ne pas bloquer la boucle
+  asyncio. Chart.js sert enfin (courbe d'équité) — d'où sa conservation.
+  Walk-forward/entraînement LightGBM : encore à venir sur cette page.
+  Validation navigateur sur historique synthétique local (Dukascopy
+  bloqué en sandbox) : 18 mois M1 → H1 en ~15 s, 0 trade (stratégie
+  muette), zéro erreur console.

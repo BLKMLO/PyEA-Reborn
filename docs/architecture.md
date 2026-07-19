@@ -35,7 +35,12 @@ PyEA-Reborn/
 │   │   └── strategy_couleuvre_v0_1.py     # Couleuvre_v0.1 (LightGBM) — squelette vide typé.
 │   │
 │   ├── risk/
-│   │   └── risk_manager.py                # Seul module qui transforme un Signal en OrderRequest.
+│   │   └── risk_manager.py                # Seul module qui transforme un Signal en OrderRequest
+│   │                                      # (v1 : taille fixe + plafond de positions).
+│   │
+│   ├── backtest/
+│   │   └── backtest_engine.py             # Rejoue l'historique via le flux complet
+│   │                                      # Strategy → RiskManager → ordre simulé.
 │   │
 │   ├── brokers/
 │   │   ├── broker_gateway.py              # Contrat générique BrokerGateway + registre.
@@ -49,13 +54,15 @@ PyEA-Reborn/
 │   ├── api/
 │   │   ├── api_pages.py                   # Pages HTML : / (live) et /backtest (Jinja2 + HTMX).
 │   │   ├── api_rest.py                    # REST : status, symbols, trading/{symbol}, positions, logs, charts.
+│   │   ├── api_backtest.py                # REST : /api/backtest/datasets et /api/backtest/run.
 │   │   └── api_websocket.py               # WebSocket /ws : relais du bus vers les navigateurs.
 │   │
 │   └── web/
 │       ├── templates/                     # base.html (header + switch Live/Backtest),
-│       │                                  # dashboard.html (live), backtest.html (placeholder).
+│       │                                  # dashboard.html (live), backtest.html (backtest).
 │       └── static/
-│           ├── js/charts.js               # Logique du dashboard : graphique, watchlist, positions.
+│           ├── js/charts.js               # Logique du dashboard live (graphique, watchlist, positions).
+│           ├── js/backtest.js             # Logique de la page backtest (formulaire, équité, trades).
 │           └── vendor/                    # Tailwind, HTMX, Lightweight Charts (chandeliers),
 │                                          # Chart.js (futurs graphiques P&L) — local, pas de CDN.
 │

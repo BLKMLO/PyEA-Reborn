@@ -35,6 +35,9 @@ paire = supprimer son dossier** ; supprimer une période = supprimer les
 fichiers d'années. Colonnes : `bid_open/high/low/close`,
 `ask_open/high/low/close`, `volume` — index UTC.
 
+C'est ce layout que l'interface de backtest (`/backtest`) découvre via
+`/api/backtest/datasets` et rejoue via `/api/backtest/run`.
+
 ## Lecture et timeframes
 
 ```python

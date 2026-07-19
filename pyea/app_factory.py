@@ -14,7 +14,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from pyea.api import api_pages, api_rest, api_websocket
+from pyea.api import api_backtest, api_pages, api_rest, api_websocket
 from pyea.config.config_settings import get_settings
 from pyea.core.core_logging import get_logger, setup_logging
 from pyea.storage.storage_database import init_db
@@ -48,5 +48,6 @@ def create_app() -> FastAPI:
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     app.include_router(api_pages.router)
     app.include_router(api_rest.router)
+    app.include_router(api_backtest.router)
     app.include_router(api_websocket.router)
     return app
