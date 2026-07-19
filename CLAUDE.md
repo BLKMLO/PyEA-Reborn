@@ -51,11 +51,14 @@ jamais commité — modèle dans `.env.example`).
   + import dans `strategies/__init__.py`. Nouveau broker : idem avec
   `brokers/broker_<nom>.py` + `@register_gateway`.
 - Tests : `tests/<package>/test_<module>.py`, miroir strict du source.
-- Graphiques : init Chart.js uniquement dans `pyea/web/static/js/charts.js`,
-  données via endpoints JSON `/api/charts/*`.
-- Libs front (Tailwind, HTMX, Chart.js) **vendorisées** dans
-  `pyea/web/static/vendor/` — jamais de CDN au runtime (le dashboard doit
-  marcher sur un VPS sans internet sortant).
+- Graphiques : init uniquement dans `pyea/web/static/js/charts.js`,
+  données via endpoints JSON `/api/charts/*`. Graphique de prix =
+  TradingView Lightweight Charts (chandeliers, pan/zoom, historique
+  paginé) ; Chart.js réservé aux futurs graphiques classiques (P&L,
+  distributions).
+- Libs front (Tailwind, HTMX, Lightweight Charts, Chart.js)
+  **vendorisées** dans `pyea/web/static/vendor/` — jamais de CDN au
+  runtime (le dashboard doit marcher sur un VPS sans internet sortant).
 
 ## Données historiques (backtest)
 
@@ -96,7 +99,7 @@ jamais commité — modèle dans `.env.example`).
 ## État du projet
 
 - Échafaudage complet et fonctionnel : serveur web, REST + WebSocket,
-  registres stratégie/broker, SQLAlchemy (SQLite), 19 tests verts.
+  registres stratégie/broker, SQLAlchemy (SQLite), 21 tests verts.
 - Dashboard live façon TradingView : chandeliers M1 au centre
   (**TradingView Lightweight Charts** : pan/zoom natifs, historique
   paginé via `?before=`, refresh incrémental `series.update` qui
