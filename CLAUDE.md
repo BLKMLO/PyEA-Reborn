@@ -80,6 +80,18 @@ jamais commité — modèle dans `.env.example`).
   (`/opt/pw-browsers/chromium`) — Chromium ne voit pas le proxy, d'où la
   vendorisation des libs front (qui était de toute façon souhaitable).
 
+## Notes environnement utilisateur (poste local, Windows)
+
+- **Python 3.13 + `pip install -r requirements.txt`** : install parfois
+  incomplète sans erreur bloquante affichée — symptôme observé chez
+  l'utilisateur : `uvicorn` présent mais `click` absent
+  (`ModuleNotFoundError` au lancement de `run_server.py`). Cause probable :
+  `lightgbm`/`pyarrow` sans wheel précompilé pour 3.13 sous Windows,
+  échec de compilation qui interrompt le reste de l'install. **Contourné**
+  en installant les paquets un par un (liste dans `requirements.txt`).
+  Recommandation : **Python 3.11 ou 3.12** pour une install garantie sans
+  y penser ; 3.13+ reste possible mais peut demander l'install manuelle.
+
 ## Documentation
 
 - `README.md` = présentation concise + démarrage rapide uniquement.
@@ -201,6 +213,13 @@ jamais commité — modèle dans `.env.example`).
   taux de gain OOS ~50 % (test `test_pas_de_fuite_pnl_nul_sur_bruit`).
   Validé sur historique synthétique local (Dukascopy bloqué) — taux réels
   à juger sur vraies données.
+- **2026-07-19** — Install Windows/Python 3.13 en échec silencieux
+  (`click` manquant alors qu'`uvicorn` est présent) : `pip install
+  -r requirements.txt` s'arrête partiellement, probablement sur
+  `lightgbm`/`pyarrow` sans wheel pour 3.13. Résolu par install paquet par
+  paquet côté utilisateur. `requirements.txt` documente désormais la
+  commande de secours et recommande Python 3.11/3.12 pour éviter le
+  problème (voir « Notes environnement utilisateur »).
 - **Squelettes vides** (NotImplementedError) à développer plus tard :
   `InteractiveBrokersGateway` (appels ib_async réels), `MarketDataFeed`.
 
