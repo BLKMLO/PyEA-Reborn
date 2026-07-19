@@ -104,7 +104,11 @@ jamais commité — modèle dans `.env.example`).
   (**TradingView Lightweight Charts** : pan/zoom natifs, historique
   paginé via `?before=`, refresh incrémental `series.update` qui
   préserve le défilement), watchlist à droite (clic = onglet, pastille
-  verte = « en trading » d'après `strategy.symbols` + `strategy.enabled`),
+  verte = paire armée), **bouton Trading (vert) / Stopped (rouge)** par
+  paire à côté du titre du graphique — état par symbole persisté en
+  SQLite (`storage_trading_state.py`, défaut = Stopped), relu à chaque
+  changement d'onglet (`GET /api/trading/{symbol}`), bascule via
+  `PUT /api/trading/{symbol}`, confirmation JS si mode live,
   panneau bas Positions (fermées grisées, récentes en premier) / Logs,
   P&L total en bas à droite, switch Live/Backtest dans le header
   (`/backtest` = placeholder). Rafraîchissement du seul graphique actif
@@ -208,3 +212,14 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
   conservé pour les futurs graphiques classiques. Le logo TradingView sur
   le graphique = attribution obligatoire (licence Apache 2.0), ne pas
   l'enlever.
+- **2026-07-19** — Bouton Trading/Stopped par paire (demande utilisateur).
+  Décisions prises : état par symbole **persisté en SQLite** (table
+  `symbol_trading_states`, un EA ne doit pas oublier ses paires armées au
+  redémarrage) ; **défaut = Stopped** pour toute paire (sécurité : rien ne
+  trade sans action explicite) ; `strategy.symbols` **supprimé** de
+  config.yaml (redondant — l'interrupteur runtime le remplace,
+  `strategy.enabled` reste le kill-switch global : le câblage réel devra
+  faire un ET des deux) ; vérification de l'état serveur à chaque
+  changement d'onglet ; `window.confirm` avant d'armer en mode live.
+  Bug démo corrigé au passage : `_base_price` classait USDJPY/USDCHF/
+  USDCAD comme indices (`startswith("US")`).

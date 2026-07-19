@@ -17,12 +17,24 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 from pyea.config.config_settings import get_settings
-from pyea.core.core_logging import web_log_buffer
+from pyea.core.core_logging import get_logger, web_log_buffer
+from pyea.storage.storage_trading_state import (
+    get_trading_states,
+    is_trading_enabled,
+    set_trading_enabled,
+)
 from pyea.strategies.strategy_registry import list_strategies
 
+logger = get_logger(__name__)
 router = APIRouter(prefix="/api", tags=["api"])
+
+
+def _require_known_symbol(symbol: str) -> None:
+    if symbol not in get_settings().history_instruments:
+        raise HTTPException(status_code=404, detail=f"Symbole inconnu : {symbol}")
 
 
 @router.get("/status")
@@ -45,18 +57,37 @@ async def get_status() -> dict[str, Any]:
 async def get_symbols() -> dict[str, Any]:
     """Watchlist du dashboard : chaque symbole + badge « en trading ».
 
-    Watchlist = history.instruments ; « en trading » = symbole listé dans
-    strategy.symbols ET stratégie activée.
+    Watchlist = history.instruments ; « en trading » = interrupteur
+    par symbole (bouton Trading/Stopped), persisté en base.
     """
     settings = get_settings()
-    traded = set(settings.strategy_symbols) if settings.strategy_enabled else set()
+    states = get_trading_states()
     return {
         "symbols": [
-            {"symbol": symbol, "trading": symbol in traded}
+            {"symbol": symbol, "trading": states.get(symbol, False)}
             for symbol in settings.history_instruments
         ],
-        "strategy_enabled": settings.strategy_enabled,
     }
+
+
+class TradingToggle(BaseModel):
+    enabled: bool
+
+
+@router.get("/trading/{symbol}")
+async def get_trading_state(symbol: str) -> dict[str, Any]:
+    """État du trading d'une paire — consulté à chaque changement d'onglet."""
+    _require_known_symbol(symbol)
+    return {"symbol": symbol, "enabled": is_trading_enabled(symbol)}
+
+
+@router.put("/trading/{symbol}")
+async def put_trading_state(symbol: str, toggle: TradingToggle) -> dict[str, Any]:
+    """Arme (Trading) ou arrête (Stopped) le trading d'une paire."""
+    _require_known_symbol(symbol)
+    enabled = set_trading_enabled(symbol, toggle.enabled)
+    logger.info("Trading %s : %s", symbol, "ARMÉ" if enabled else "ARRÊTÉ")
+    return {"symbol": symbol, "enabled": enabled}
 
 
 @router.get("/logs")
@@ -73,7 +104,7 @@ def _base_price(symbol: str) -> float:
     seed = zlib.crc32(symbol.encode())
     if symbol.startswith("XAU"):
         return float(1800 + seed % 400)
-    if symbol.startswith("US") or symbol.startswith("NAS"):
+    if symbol in ("US500", "US30", "NAS100"):
         return float(3000 + seed % 2000)
     if symbol.endswith("JPY"):
         return float(100 + seed % 60)
@@ -137,9 +168,7 @@ async def get_price_history(
     c'est la pagination utilisée par le défilement vers le passé.
     ``has_more`` indique s'il reste de l'historique plus ancien.
     """
-    settings = get_settings()
-    if symbol not in settings.history_instruments:
-        raise HTTPException(status_code=404, detail=f"Symbole inconnu : {symbol}")
+    _require_known_symbol(symbol)
     points = max(10, min(points, 1000))
     now_minute = int(datetime.now(timezone.utc).timestamp() // 60)
     end_minute = now_minute if before is None else min(before // 60 - 1, now_minute)
@@ -149,11 +178,13 @@ async def get_price_history(
 
 
 def _demo_positions(settings: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Positions de démonstration bâties sur les symboles tradés."""
+    """Positions de démonstration : paires armées, sinon têtes de watchlist."""
+    armed = [symbol for symbol, on in get_trading_states().items() if on]
+    demo_symbols = (armed or settings.history_instruments)[:3]
     now = datetime.now(timezone.utc)
     now_minute = int(now.timestamp() // 60)
     open_positions = []
-    for i, symbol in enumerate(settings.strategy_symbols[:3]):
+    for i, symbol in enumerate(demo_symbols):
         rng = random.Random(f"open:{symbol}")
         entry = _base_price(symbol)
         current = _demo_candles(symbol, now_minute, 1)[-1]["close"]
@@ -173,7 +204,7 @@ def _demo_positions(settings: Any) -> tuple[list[dict[str, Any]], list[dict[str,
         )
     closed_positions = []
     for i in range(5):
-        symbol = settings.strategy_symbols[i % len(settings.strategy_symbols)]
+        symbol = demo_symbols[i % len(demo_symbols)]
         rng = random.Random(f"closed:{symbol}:{i}")
         entry = _base_price(symbol)
         exit_ = entry * (1 + rng.uniform(-0.004, 0.006))

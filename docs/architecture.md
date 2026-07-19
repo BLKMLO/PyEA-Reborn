@@ -42,12 +42,13 @@ PyEA-Reborn/
 │   │   └── broker_interactive_brokers.py  # 1re implémentation (ib_async). Suivant : broker_<nom>.py.
 │   │
 │   ├── storage/
-│   │   ├── storage_models.py              # Modèles SQLAlchemy (signals, trades).
-│   │   └── storage_database.py            # Moteur/sessions ; SQLite → Postgres via database_url.
+│   │   ├── storage_models.py              # Modèles SQLAlchemy (signals, trades, états de trading).
+│   │   ├── storage_database.py            # Moteur/sessions ; SQLite → Postgres via database_url.
+│   │   └── storage_trading_state.py       # Interrupteur Trading/Stopped par symbole (persisté).
 │   │
 │   ├── api/
 │   │   ├── api_pages.py                   # Pages HTML : / (live) et /backtest (Jinja2 + HTMX).
-│   │   ├── api_rest.py                    # REST : status, symbols, positions, logs, charts (/api/*).
+│   │   ├── api_rest.py                    # REST : status, symbols, trading/{symbol}, positions, logs, charts.
 │   │   └── api_websocket.py               # WebSocket /ws : relais du bus vers les navigateurs.
 │   │
 │   └── web/
