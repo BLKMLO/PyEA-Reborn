@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, Integer, String
+from sqlalchemy import Boolean, DateTime, Float, Integer, String
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -14,6 +14,41 @@ def _utcnow() -> datetime:
 
 class Base(DeclarativeBase):
     pass
+
+
+class SymbolTradingState(Base):
+    """Interrupteur de trading par symbole (bouton Trading/Stopped du
+    dashboard). Persisté pour survivre aux redémarrages ; toute paire
+    absente de la table est considérée arrêtée (défaut sûr)."""
+
+    __tablename__ = "symbol_trading_states"
+
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+
+class TrainingRun(Base):
+    """Un entraînement walk-forward : paramètres, métriques out-of-sample
+    et chemin des artefacts. C'est ce qui permet de comparer deux runs."""
+
+    __tablename__ = "training_runs"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    strategy_name: Mapped[str] = mapped_column(String(64))
+    symbol: Mapped[str] = mapped_column(String(32))
+    timeframe: Mapped[str] = mapped_column(String(8))
+    params_json: Mapped[str] = mapped_column(String(2048), default="{}")
+    folds: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(16), default="running")
+    oos_trades: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    oos_pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
+    oos_win_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    oos_max_drawdown: Mapped[float | None] = mapped_column(Float, nullable=True)
+    artifacts_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
 
 class SignalRecord(Base):

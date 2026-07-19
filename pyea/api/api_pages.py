@@ -26,3 +26,8 @@ async def dashboard(request: Request) -> HTMLResponse:
 @router.get("/backtest", response_class=HTMLResponse)
 async def backtest(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "backtest.html", {"page": "backtest"})
+
+
+@router.get("/training", response_class=HTMLResponse)
+async def training(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request, "training.html", {"page": "training"})

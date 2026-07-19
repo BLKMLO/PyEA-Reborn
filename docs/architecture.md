@@ -30,31 +30,49 @@ PyEA-Reborn/
 │   │   └── data_history_downloader.py     # Historique M1 Dukascopy → Parquet (+ load/resample).
 │   │
 │   ├── strategies/
-│   │   ├── strategy_base.py               # Contrat abstrait Strategy (warmup / on_tick / shutdown).
+│   │   ├── strategy_base.py               # Contrat abstrait Strategy (warmup / on_tick / shutdown / train).
 │   │   ├── strategy_registry.py           # Registre plugin : @register_strategy, lookup par nom.
-│   │   └── strategy_couleuvre_v0_1.py     # Couleuvre_v0.1 (LightGBM) — squelette vide typé.
+│   │   ├── strategy_couleuvre_features.py # 34 features causales (sans fuite) + ATR brut.
+│   │   ├── strategy_couleuvre_labeling.py # Labeling triple-barrier (label binaire symétrique).
+│   │   └── strategy_couleuvre_v0_1.py     # Couleuvre_v0.1 : train (LightGBM) / warmup / on_tick.
 │   │
 │   ├── risk/
-│   │   └── risk_manager.py                # Seul module qui transforme un Signal en OrderRequest.
+│   │   └── risk_manager.py                # Seul module qui transforme un Signal en OrderRequest
+│   │                                      # (v1 : taille fixe + plafond de positions).
+│   │
+│   ├── backtest/
+│   │   └── backtest_engine.py             # Rejoue l'historique via le flux complet
+│   │                                      # Strategy → RiskManager → ordre simulé
+│   │                                      # (barrières TP/SL intrabar, clôture fin de semaine).
+│   │
+│   ├── training/
+│   │   ├── training_walkforward.py        # Découpe walk-forward + orchestration train/test.
+│   │   └── training_jobs.py               # Jobs en thread, progression → bus → WebSocket.
 │   │
 │   ├── brokers/
 │   │   ├── broker_gateway.py              # Contrat générique BrokerGateway + registre.
 │   │   └── broker_interactive_brokers.py  # 1re implémentation (ib_async). Suivant : broker_<nom>.py.
 │   │
 │   ├── storage/
-│   │   ├── storage_models.py              # Modèles SQLAlchemy (signals, trades).
-│   │   └── storage_database.py            # Moteur/sessions ; SQLite → Postgres via database_url.
+│   │   ├── storage_models.py              # Modèles SQLAlchemy (signals, trades, états, runs).
+│   │   ├── storage_database.py            # Moteur/sessions ; SQLite → Postgres via database_url.
+│   │   ├── storage_trading_state.py       # Interrupteur Trading/Stopped par symbole (persisté).
+│   │   └── storage_training_runs.py       # Historique des entraînements (métriques OOS, artefacts).
 │   │
 │   ├── api/
-│   │   ├── api_pages.py                   # Pages HTML : / (live) et /backtest (Jinja2 + HTMX).
-│   │   ├── api_rest.py                    # REST : status, symbols, positions, logs, charts (/api/*).
+│   │   ├── api_pages.py                   # Pages HTML : / (live), /backtest, /training (Jinja2 + HTMX).
+│   │   ├── api_rest.py                    # REST : status, symbols, trading/{symbol}, positions, logs, charts.
+│   │   ├── api_backtest.py                # REST : /api/backtest/datasets et /api/backtest/run.
+│   │   ├── api_training.py                # REST : /api/training/run, jobs/{id}, runs, definition/{strategy}.
 │   │   └── api_websocket.py               # WebSocket /ws : relais du bus vers les navigateurs.
 │   │
 │   └── web/
-│       ├── templates/                     # base.html (header + switch Live/Backtest),
-│       │                                  # dashboard.html (live), backtest.html (placeholder).
+│       ├── templates/                     # base.html (header + nav Live/Backtest/Entraînement),
+│       │                                  # dashboard.html, backtest.html (run unique), training.html.
 │       └── static/
-│           ├── js/charts.js               # Logique du dashboard : graphique, watchlist, positions.
+│           ├── js/charts.js               # Logique du dashboard live (graphique, watchlist, positions).
+│           ├── js/backtest.js             # Page backtest : formulaire, équité, trades (run unique).
+│           ├── js/training.js             # Page entraînement : walk-forward, équité OOS, plis, définition.
 │           └── vendor/                    # Tailwind, HTMX, Lightweight Charts (chandeliers),
 │                                          # Chart.js (futurs graphiques P&L) — local, pas de CDN.
 │

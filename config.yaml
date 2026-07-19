@@ -15,13 +15,10 @@ broker:
 strategy:
   # Stratégie active : doit correspondre à une clé du registre de stratégies.
   name: "couleuvre_v0_1"
+  # Kill-switch GLOBAL de la stratégie. Le trading par paire se pilote
+  # depuis le dashboard (bouton Trading/Stopped, persisté en base) :
+  # une paire ne trade que si ce flag ET son interrupteur sont actifs.
   enabled: false
-  # Actifs effectivement tradés par la stratégie (sous-ensemble de la
-  # watchlist history.instruments) — badge « en trading » du dashboard.
-  symbols:
-    - EURUSD
-    - GBPUSD
-    - XAUUSD
 
 ui:
   # Période de rafraîchissement du graphique actif du dashboard (secondes).
@@ -78,6 +75,9 @@ history:
 storage:
   # URL SQLAlchemy — remplacer par postgresql+psycopg://... pour migrer.
   database_url: "sqlite:///./data/pyea.db"
+  # Artefacts d'entraînement (metadata.json, modèles LightGBM à venir) :
+  # un sous-dossier par run — data/models/<strategie>-<horodatage>/.
+  models_dir: "./data/models"
 
 logging:
   level: "INFO"

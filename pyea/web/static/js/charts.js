@@ -25,6 +25,7 @@ const state = {
   activeSymbol: null,
   refreshSeconds: 5,
   timer: null,
+  tradingMode: "paper",   // "live" déclenche une confirmation avant d'armer
 };
 
 const UP_COLOR = "#34d399";
@@ -136,6 +137,45 @@ function setActiveSymbol(symbol) {
   });
   createChart();          // nouveau graphique vierge pour l'onglet
   loadInitialCandles();
+  refreshTradingButton(); // vérifie si le trading est déjà en cours sur la paire
+}
+
+// --- Bouton Trading/Stopped ------------------------------------------------
+
+function renderTradingButton(enabled) {
+  const button = document.getElementById("trading-toggle");
+  button.classList.remove("hidden");
+  button.dataset.enabled = String(enabled);
+  button.textContent = enabled ? "Trading" : "Stopped";
+  button.className = "rounded px-3 py-0.5 text-xs font-semibold " + (enabled
+    ? "bg-emerald-600 text-white hover:bg-emerald-500"
+    : "bg-red-600 text-white hover:bg-red-500");
+}
+
+async function refreshTradingButton() {
+  // Interroge l'état serveur à CHAQUE changement d'onglet : l'état peut
+  // avoir bougé depuis un autre navigateur/onglet.
+  const symbol = state.activeSymbol;
+  const response = await fetch(`/api/trading/${symbol}`);
+  if (!response.ok || symbol !== state.activeSymbol) return;
+  renderTradingButton((await response.json()).enabled);
+}
+
+async function toggleTrading() {
+  const button = document.getElementById("trading-toggle");
+  const target = button.dataset.enabled !== "true";
+  if (target && state.tradingMode === "live" &&
+      !window.confirm(`Armer le trading LIVE sur ${state.activeSymbol} ?`)) {
+    return;
+  }
+  const response = await fetch(`/api/trading/${state.activeSymbol}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled: target }),
+  });
+  if (!response.ok) return;
+  renderTradingButton((await response.json()).enabled);
+  loadSymbols(); // synchronise les pastilles de la watchlist
 }
 
 async function loadSymbols() {
@@ -152,6 +192,8 @@ async function loadSymbols() {
       <span class="h-2 w-2 rounded-full ${item.trading ? "bg-emerald-400" : "bg-slate-600"}"
             title="${item.trading ? "En trading" : "Inactif"}"></span>`;
     li.addEventListener("click", () => setActiveSymbol(item.symbol));
+    // Reconstruit la liste sans perdre l'onglet actif.
+    li.classList.toggle("bg-slate-700", item.symbol === state.activeSymbol);
     list.appendChild(li);
   }
   if (!state.activeSymbol && data.symbols.length) {
@@ -227,6 +269,7 @@ async function loadStatus() {
   const response = await fetch("/api/status");
   const status = await response.json();
   state.refreshSeconds = status.chart_refresh_seconds || 5;
+  state.tradingMode = status.trading_mode;
   document.getElementById("header-status").textContent =
     `${status.trading_mode.toUpperCase()} · ${status.broker}` +
     ` · broker ${status.broker_connected ? "connecté" : "déconnecté"}` +
@@ -250,6 +293,7 @@ function initWebSocket() {
 document.addEventListener("DOMContentLoaded", async () => {
   initBottomTabs();
   initWebSocket();
+  document.getElementById("trading-toggle").addEventListener("click", toggleTrading);
   await loadStatus();
   await loadSymbols();      // déclenche le premier rendu du graphique
   await refreshPositions();

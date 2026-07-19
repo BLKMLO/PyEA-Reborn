@@ -44,7 +44,6 @@ class Settings(BaseSettings):
     trading_mode: Literal["paper", "live"] = "paper"
     strategy_name: str = "couleuvre_v0_1"
     strategy_enabled: bool = False
-    strategy_symbols: list[str] = ["EURUSD"]
     ui_chart_refresh_seconds: int = 5
     risk_max_position_size: int = 1
     risk_max_daily_loss_pct: float = 2.0
@@ -53,6 +52,7 @@ class Settings(BaseSettings):
     history_start_year: int = 2010
     history_instruments: list[str] = ["EURUSD"]
     database_url: str = "sqlite:///./data/pyea.db"
+    models_dir: str = "./data/models"
     log_level: str = "INFO"
     log_file: str = "./logs/pyea.log"
     log_web_buffer_size: int = 500
@@ -88,7 +88,6 @@ def _yaml_overrides(raw: dict[str, Any]) -> dict[str, Any]:
         "trading_mode": broker.get("trading_mode"),
         "strategy_name": strategy.get("name"),
         "strategy_enabled": strategy.get("enabled"),
-        "strategy_symbols": strategy.get("symbols"),
         "ui_chart_refresh_seconds": ui.get("chart_refresh_seconds"),
         "risk_max_position_size": risk.get("max_position_size"),
         "risk_max_daily_loss_pct": risk.get("max_daily_loss_pct"),
@@ -97,6 +96,7 @@ def _yaml_overrides(raw: dict[str, Any]) -> dict[str, Any]:
         "history_start_year": history.get("start_year"),
         "history_instruments": history.get("instruments"),
         "database_url": storage.get("database_url"),
+        "models_dir": storage.get("models_dir"),
         "log_level": logging_cfg.get("level"),
         "log_file": logging_cfg.get("file"),
         "log_web_buffer_size": logging_cfg.get("web_buffer_size"),

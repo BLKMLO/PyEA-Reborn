@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+
+{% block title %}Entraînement — PyEA{% endblock %}
+
+{% block head %}
+  <!-- Chart.js (local) pour la courbe d'équité out-of-sample. -->
+  <script src="/static/vendor/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block content %}
+  <div class="flex min-h-0 flex-1">
+    <!-- Paramètres de validation -->
+    <aside class="flex w-72 shrink-0 flex-col gap-3 overflow-y-auto border-r border-slate-700 bg-slate-800 p-4">
+      <h2 class="text-xs font-semibold uppercase tracking-wide text-slate-400">Entraînement (walk-forward)</h2>
+
+      <label class="text-xs text-slate-400">Symbole
+        <select id="tr-symbol" class="mt-1 w-full rounded bg-slate-700 px-2 py-1.5 text-sm text-slate-100"></select>
+      </label>
+      <label class="text-xs text-slate-400">Timeframe
+        <select id="tr-timeframe" class="mt-1 w-full rounded bg-slate-700 px-2 py-1.5 text-sm text-slate-100"></select>
+      </label>
+      <label class="text-xs text-slate-400">Stratégie
+        <select id="tr-strategy" class="mt-1 w-full rounded bg-slate-700 px-2 py-1.5 text-sm text-slate-100"></select>
+      </label>
+      <div class="flex gap-2">
+        <label class="flex-1 text-xs text-slate-400">Début
+          <input id="tr-start" type="date" class="mt-1 w-full rounded bg-slate-700 px-2 py-1.5 text-sm text-slate-100">
+        </label>
+        <label class="flex-1 text-xs text-slate-400">Fin
+          <input id="tr-end" type="date" class="mt-1 w-full rounded bg-slate-700 px-2 py-1.5 text-sm text-slate-100">
+        </label>
+      </div>
+      <label class="text-xs text-slate-400">Plis (blocs out-of-sample)
+        <input id="tr-folds" type="number" value="4" min="1" max="20"
+               class="mt-1 w-full rounded bg-slate-700 px-2 py-1.5 text-sm text-slate-100">
+      </label>
+
+      <button id="tr-run" class="mt-1 rounded bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-50">
+        Lancer l'entraînement
+      </button>
+      <div id="tr-progress-wrap" class="hidden">
+        <div class="h-2 w-full overflow-hidden rounded bg-slate-700">
+          <div id="tr-progress-bar" class="h-full bg-sky-500 transition-all" style="width:0%"></div>
+        </div>
+        <div class="mt-1 flex items-center justify-between">
+          <span id="tr-progress-text" class="text-[11px] text-slate-400"></span>
+          <button id="tr-cancel" class="text-[11px] text-red-400 hover:text-red-300">annuler</button>
+        </div>
+      </div>
+      <p id="tr-message" class="text-xs text-slate-500"></p>
+
+      <!-- Définition figée du modèle (lecture seule) -->
+      <div class="mt-2 rounded bg-slate-900/60 p-3">
+        <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Définition du modèle</h3>
+        <dl id="tr-model-def" class="space-y-1 text-[11px] text-slate-400"></dl>
+      </div>
+
+      <p class="text-[11px] leading-relaxed text-slate-500">
+        Un modèle par actif, entraîné manuellement. La métrique qui compte
+        est l'<b>out-of-sample</b> : comparez l'<b>AUC IS</b> (in-sample) au
+        taux de gain OOS — un grand écart trahit le surapprentissage.
+      </p>
+    </aside>
+
+    <!-- Résultats -->
+    <main class="flex min-w-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
+      <div id="tr-empty" class="rounded-lg bg-slate-800 p-6 text-center text-sm text-slate-500">
+        Lancez un entraînement pour voir les résultats out-of-sample.
+      </div>
+
+      <div id="tr-results" class="hidden flex-col gap-3">
+        <div id="tr-stats" class="grid grid-cols-2 gap-3 md:grid-cols-4"></div>
+
+        <div class="rounded-lg bg-slate-800 p-3">
+          <h3 class="mb-2 text-sm font-medium text-slate-300">
+            Courbe d'équité <span class="text-emerald-400">out-of-sample</span>
+          </h3>
+          <div class="relative h-64"><canvas id="tr-equity"></canvas></div>
+        </div>
+
+        <div class="rounded-lg bg-slate-800 p-3">
+          <h3 class="mb-2 text-sm font-medium text-slate-300">Plis (walk-forward)</h3>
+          <div class="max-h-64 overflow-y-auto">
+            <table class="w-full text-left text-xs">
+              <thead class="sticky top-0 bg-slate-800 text-slate-400">
+                <tr>
+                  <th class="py-1 pr-2">Pli</th><th class="pr-2">Train (bougies)</th>
+                  <th class="pr-2" title="Skill du modèle en in-sample (AUC ≈ 1 = mémorise). À comparer au taux de gain OOS : un grand écart = surapprentissage.">AUC IS</th>
+                  <th class="pr-2">Test</th><th class="pr-2">Trades</th>
+                  <th class="pr-2">P&L OOS</th><th class="pr-2">Taux gain</th><th>DD max</th>
+                </tr>
+              </thead>
+              <tbody id="tr-folds-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Historique des runs (table training_runs) -->
+      <div class="min-h-0 rounded-lg bg-slate-800 p-3">
+        <h3 class="mb-2 text-sm font-medium text-slate-300">Historique des entraînements</h3>
+        <div class="max-h-56 overflow-y-auto">
+          <table class="w-full text-left text-xs">
+            <thead class="sticky top-0 bg-slate-800 text-slate-400">
+              <tr>
+                <th class="py-1 pr-2">Run</th><th class="pr-2">Date</th>
+                <th class="pr-2">Symbole</th><th class="pr-2">TF</th><th class="pr-2">Plis</th>
+                <th class="pr-2">Statut</th><th class="pr-2">Trades OOS</th>
+                <th class="pr-2">P&L OOS</th><th>Taux gain</th>
+              </tr>
+            </thead>
+            <tbody id="tr-runs-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+{% endblock %}
+
+{% block scripts %}
+  <script src="/static/js/training.js"></script>
+{% endblock %}
