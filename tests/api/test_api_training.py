@@ -57,7 +57,10 @@ def test_entrainement_complet(training_env: Path) -> None:
 
         assert job["status"] == "completed"
         assert len(job["result"]["folds"]) == 3
-        assert job["result"]["oos_stats"]["trades"] == 0  # Couleuvre muette.
+        # Historique très court (≈72 bougies H1) → sous MIN_TRAIN_SAMPLES :
+        # Couleuvre ne s'entraîne pas, donc aucun trade OOS.
+        assert job["result"]["oos_stats"]["trades"] == 0
+        assert job["result"]["folds"][0]["train_report"]["trained"] is False
 
         # Les artefacts du run existent.
         assert (training_env / "models" / payload["run_id"] / "metadata.json").exists()
@@ -67,6 +70,18 @@ def test_entrainement_complet(training_env: Path) -> None:
         assert runs[0]["id"] == payload["run_id"]
         assert runs[0]["status"] == "completed"
         assert runs[0]["oos_trades"] == 0
+
+
+def test_definition_modele() -> None:
+    with TestClient(create_app()) as client:
+        ok = client.get("/api/training/definition/couleuvre_v0_1")
+        unknown = client.get("/api/training/definition/inexistante")
+    assert ok.status_code == 200
+    definition = ok.json()["definition"]
+    assert definition["n_features"] > 0
+    assert definition["barrier_atr_mult"] > 0
+    assert "enter_long_threshold" in definition
+    assert unknown.status_code == 404
 
 
 def test_erreurs_entrainement(training_env: Path) -> None:

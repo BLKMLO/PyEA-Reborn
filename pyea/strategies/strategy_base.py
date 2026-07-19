@@ -48,3 +48,13 @@ class Strategy(ABC):
     def describe(self) -> dict[str, str]:
         """Métadonnées affichées sur le dashboard."""
         return {"name": self.name, "version": self.version}
+
+    def model_definition(self) -> dict[str, Any] | None:
+        """Paramètres FIGÉS du modèle (features, barrières, seuils…) exposés
+        en lecture seule par la page Entraînement.
+
+        Optionnel : une stratégie sans définition versionnée garde ce défaut
+        (``None``). Une stratégie ML (Couleuvre) retourne ses constantes,
+        source unique de vérité — l'UI ne les code jamais en dur.
+        """
+        return None

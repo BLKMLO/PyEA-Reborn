@@ -77,8 +77,9 @@ développe le raisonnement pour celles qui structurent le projet.
     colonne « AUC IS » affichée en regard du taux de gain OOS par pli :
     l'écart entre les deux est le diagnostic direct de surapprentissage.
   - *Un modèle par actif, entraîné manuellement* : chaque paire se forme
-    via la page backtest (un symbole par run) ; le walk-forward
-    out-of-sample de cette page EST le test de qualité de la paire.
+    via la page **Entraînement** (`/training`, un symbole par run) ; le
+    walk-forward out-of-sample de cette page EST le test de qualité de la
+    paire.
 
 - **Dukascopy comme source d'historique** (plutôt qu'IB ou yfinance) :
   flux public gratuit sans compte, M1 remontant avant 2010 sur le forex ;

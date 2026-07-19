@@ -95,7 +95,8 @@
    TP/SL dimensionnées au même multiple d'ATR que le labeling) : **fait**.
    Livré avec l'étape 3 car sans inférence le walk-forward ne testerait
    rien.
-5. ✅ Walk-forward complet sur la page backtest — **opérationnel** : décider
+5. ✅ Walk-forward complet sur la page **Entraînement** (`/training`) —
+   **opérationnel** : décider
    sur les métriques **out-of-sample uniquement**. La colonne « AUC IS »
    (in-sample) affichée en regard du taux de gain OOS par pli rend l'écart
    de généralisation (surapprentissage) visible d'un coup d'œil.
@@ -103,10 +104,10 @@
 ## Comment vérifier qu'un modèle est bon sur une paire
 
 Il n'y a pas de « bouton test » séparé : **le walk-forward de la page
-backtest EST le test**. Pour une paire :
+Entraînement EST le test**. Pour une paire :
 
-1. Section « Entraînement » → choisir le symbole, le timeframe, le nombre
-   de plis, lancer.
+1. Page **Entraînement** (`/training`) → choisir le symbole, le timeframe,
+   le nombre de plis, lancer.
 2. Lire les **métriques out-of-sample** (trades, P&L, taux de gain,
    drawdown) — jamais l'in-sample, toujours optimiste.
 3. Comparer, par pli, **AUC IS** (skill in-sample, proche de 1 = le modèle

@@ -110,8 +110,8 @@ jamais commité — modèle dans `.env.example`).
   changement d'onglet (`GET /api/trading/{symbol}`), bascule via
   `PUT /api/trading/{symbol}`, confirmation JS si mode live,
   panneau bas Positions (fermées grisées, récentes en premier) / Logs,
-  P&L total en bas à droite, switch Live/Backtest dans le header
-  (`/backtest` = placeholder). Rafraîchissement du seul graphique actif
+  P&L total en bas à droite, **nav à 3 pages dans le header : Live |
+  Backtest | Entraînement**. Rafraîchissement du seul graphique actif
   toutes `ui.chart_refresh_seconds` (config.yaml, défaut 5 s).
   **Données factices déterministes** (seed symbole+minute) servies par
   `/api/charts/price-history` et `/api/positions` — le câblage broker
@@ -122,7 +122,8 @@ jamais commité — modèle dans `.env.example`).
   dans `data/history/`) — **pas encore validé contre le flux réel**
   (réseau sortant bloqué dans la sandbox de dev) : au premier lancement
   chez l'utilisateur, vérifier les prix logués (facteurs décimaux) .
-- Interface de backtest opérationnelle (`/backtest`) : formulaire
+- Interface de backtest opérationnelle (`/backtest`, **recentrée sur le run
+  unique** depuis que l'entraînement a sa propre page) : formulaire
   (symbole/timeframe/stratégie/période, alimenté par
   `/api/backtest/datasets` qui scanne `data/history/`), exécution via
   `POST /api/backtest/run` (endpoint sync → threadpool FastAPI, ne bloque
@@ -137,25 +138,33 @@ jamais commité — modèle dans `.env.example`).
   ISO** (jamais de portage week-end), liquidation en fin de période,
   courbe d'équité ≤ 500 points). Les barrières transitent par le domaine :
   `Signal.stop_loss`/`take_profit` → RiskManager → `OrderRequest`. Frames
-  sans high/low (tests) : barrières neutralisées sur le close. Couleuvre
-  étant muette, un run rend honnêtement 0 trade.
+  sans high/low (tests) : barrières neutralisées sur le close. Sur cette
+  page, Couleuvre n'a pas de modèle chargé (aucun entraînement dans un run
+  de backtest simple) → 0 trade honnête ; pour la voir trader, passer par
+  la page Entraînement (walk-forward).
 - `RiskManager.evaluate` **v1 implémentée** (plus un squelette) : HOLD
   ignoré, EXIT → ordre inverse de la position ouverte, entrées à taille
   fixe `risk.max_position_size` refusées au-delà de
   `risk.max_open_positions`. À enrichir : perte journalière max,
   kill-switch, sizing dynamique.
-- **Infra d'entraînement opérationnelle** (page backtest, section
-  « Entraînement ») : walk-forward à fenêtre expansive
+- **Page Entraînement dédiée** (`/training`, `training.html` +
+  `training.js`) : walk-forward à fenêtre expansive
   (`pyea/training/training_walkforward.py`, plis de test consécutifs,
   jamais de split aléatoire), exécution en **job de thread**
   (`training_jobs.py`, un seul job actif à la fois, annulable),
   progression **temps réel** via bus topic `training.progress` → WebSocket
   (+ polling `GET /api/training/jobs/{id}` en secours). Chaque run est
   historisé en SQLite (table `training_runs` : params, métriques OOS,
-  statut) avec artefacts dans `data/models/<run>/` (metadata.json ;
-  `model.txt` LightGBM viendra). Hook `Strategy.train(frame, params)`
-  ajouté au contrat (défaut no-op = stratégie non entraînable). L'UI
-  met en avant l'**out-of-sample** (l'in-sample surestime toujours).
+  statut) avec artefacts dans `data/models/<run>/` (metadata.json +
+  `model.txt`/`features.json` par pli). Hook `Strategy.train(frame, params)`
+  au contrat (défaut no-op = non entraînable). L'UI met en avant
+  l'**out-of-sample** : cartes OOS, **courbe d'équité OOS**, table des plis
+  avec colonne **AUC IS** (in-sample) en regard du taux de gain OOS (écart =
+  surapprentissage), et **panneau « définition du modèle » en lecture
+  seule** (features/barrières/horizon/seuils, servi par
+  `GET /api/training/definition/{strategy}` = source unique via
+  `Strategy.model_definition()`). La page backtest garde un renvoi vers
+  cet onglet.
 - **Spécification de Couleuvre v0.1** fournie par l'utilisateur :
   `docs/strategie_couleuvre.md` (swing intra-semaine 2-5 j, triple
   barrier ATR, features prix/tendance/momentum/vol/calendrier, **un modèle
@@ -384,3 +393,25 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
   bout en bout dans le navigateur (EURUSD H1, 3 plis, table OOS + AUC IS,
   zéro erreur console). 12 tests ajoutés, **73 verts**. `lightgbm` doit
   être installé (déjà dans requirements). Reste : gateway IB + feed réels.
+- **2026-07-19** — Refonte ergonomique : **entraînement sur sa propre page**
+  (`/training`), nav header à 3 entrées (Live | Backtest | Entraînement),
+  demandée par l'utilisateur. Décisions : (1) **3 pages séparées** plutôt
+  qu'onglets — la page backtest mélangeait deux métiers (run unique vs
+  entraînement/validation) ; chaque page a désormais un seul métier, ses
+  propres sélecteurs, son propre JS (`backtest.js` scindé → `training.js`).
+  (2) **Ajouts page Entraînement** : la **courbe d'équité OOS**
+  (`oos_equity_curve` était calculée mais jamais affichée) et un **panneau
+  « définition du modèle » en lecture seule**. (3) **Définition servie par
+  l'API** (`GET /api/training/definition/{strategy}` →
+  `Strategy.model_definition()`, défaut None) plutôt que codée en dur dans
+  le template : source unique = les constantes réelles, zéro dérive. (4)
+  **Refusé de rendre barrières/seuils tunables dans l'UI** (l'utilisateur a
+  suivi) : ce sont la *définition* de `couleuvre_v0_1` (cohérence
+  labeling/exécution), et les rendre réglables inciterait à optimiser sur
+  l'OOS ; une future `couleuvre_v0_2` versionnée serait la voie propre.
+  Conséquence testée : commentaire trompeur corrigé dans
+  `test_entrainement_complet` (0 trade = historique sous
+  `MIN_TRAIN_SAMPLES`, pas « stratégie muette »). Validé dans le navigateur
+  (backtest recentré + entraînement complet, définition affichée, équité
+  OOS, zéro erreur console). 2 tests ajoutés, **75 verts**. Reste : gateway
+  IB + feed réels (câblage live).

@@ -23,6 +23,14 @@ def test_page_backtest_repond() -> None:
     assert "Backtest" in response.text
 
 
+def test_page_training_repond() -> None:
+    with _client() as client:
+        response = client.get("/training")
+    assert response.status_code == 200
+    assert "Entraînement" in response.text
+    assert "/static/js/training.js" in response.text
+
+
 def test_status_repond() -> None:
     with _client() as client:
         response = client.get("/api/status")

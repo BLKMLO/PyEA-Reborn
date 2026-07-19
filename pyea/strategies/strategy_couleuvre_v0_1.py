@@ -42,6 +42,7 @@ from pyea.strategies.strategy_couleuvre_features import (
 )
 from pyea.strategies.strategy_couleuvre_labeling import (
     BARRIER_ATR_MULT,
+    MAX_HOLD_DAYS,
     triple_barrier_labels,
 )
 from pyea.strategies.strategy_registry import register_strategy
@@ -175,6 +176,17 @@ class CouleuvreV01(Strategy):
         # Libère les buffers d'inférence (le modèle reste en mémoire).
         self._proba = None
         self._atr = None
+
+    def model_definition(self) -> dict[str, Any]:
+        """Constantes figées de couleuvre_v0_1 (source unique pour l'UI)."""
+        return {
+            "n_features": len(FEATURE_COLUMNS),
+            "barrier_atr_mult": BARRIER_ATR_MULT,
+            "max_hold_days": MAX_HOLD_DAYS,
+            "enter_long_threshold": ENTER_LONG_THRESHOLD,
+            "enter_short_threshold": ENTER_SHORT_THRESHOLD,
+            "objective": "binaire — P(barrière haute touchée avant la basse)",
+        }
 
     # ------------------------------------------------------------- persistance
     def _save(self, model_dir: Path, params: dict[str, Any]) -> str:

@@ -60,18 +60,19 @@ PyEA-Reborn/
 │   │   └── storage_training_runs.py       # Historique des entraînements (métriques OOS, artefacts).
 │   │
 │   ├── api/
-│   │   ├── api_pages.py                   # Pages HTML : / (live) et /backtest (Jinja2 + HTMX).
+│   │   ├── api_pages.py                   # Pages HTML : / (live), /backtest, /training (Jinja2 + HTMX).
 │   │   ├── api_rest.py                    # REST : status, symbols, trading/{symbol}, positions, logs, charts.
 │   │   ├── api_backtest.py                # REST : /api/backtest/datasets et /api/backtest/run.
-│   │   ├── api_training.py                # REST : /api/training/run, jobs/{id}, runs.
+│   │   ├── api_training.py                # REST : /api/training/run, jobs/{id}, runs, definition/{strategy}.
 │   │   └── api_websocket.py               # WebSocket /ws : relais du bus vers les navigateurs.
 │   │
 │   └── web/
-│       ├── templates/                     # base.html (header + switch Live/Backtest),
-│       │                                  # dashboard.html (live), backtest.html (backtest).
+│       ├── templates/                     # base.html (header + nav Live/Backtest/Entraînement),
+│       │                                  # dashboard.html, backtest.html (run unique), training.html.
 │       └── static/
 │           ├── js/charts.js               # Logique du dashboard live (graphique, watchlist, positions).
-│           ├── js/backtest.js             # Logique de la page backtest (formulaire, équité, trades).
+│           ├── js/backtest.js             # Page backtest : formulaire, équité, trades (run unique).
+│           ├── js/training.js             # Page entraînement : walk-forward, équité OOS, plis, définition.
 │           └── vendor/                    # Tailwind, HTMX, Lightweight Charts (chandeliers),
 │                                          # Chart.js (futurs graphiques P&L) — local, pas de CDN.
 │

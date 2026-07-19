@@ -117,3 +117,13 @@ async def cancel_job(job_id: str) -> dict[str, Any]:
 async def get_runs(limit: int = 50) -> dict[str, Any]:
     """Historique des entraînements (récents d'abord), pour comparaison."""
     return {"runs": list_runs(limit)}
+
+
+@router.get("/definition/{strategy}")
+async def get_definition(strategy: str) -> dict[str, Any]:
+    """Paramètres figés du modèle (lecture seule, page Entraînement)."""
+    try:
+        strategy_cls = get_strategy(strategy)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"strategy": strategy, "definition": strategy_cls().model_definition()}
