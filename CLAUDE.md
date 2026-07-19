@@ -158,15 +158,25 @@ jamais commité — modèle dans `.env.example`).
   met en avant l'**out-of-sample** (l'in-sample surestime toujours).
 - **Spécification de Couleuvre v0.1** fournie par l'utilisateur :
   `docs/strategie_couleuvre.md` (swing intra-semaine 2-5 j, triple
-  barrier ATR, features prix/tendance/momentum/vol/calendrier, un modèle
-  par actif). Les deux **pré-requis moteur** (clôture forcée de fin de
-  semaine + barrières intrabar) sont **livrés** (moteur v2) ; reste le
-  labeling triple-barrier sur l'historique pour `train()`. Volume forex
-  Dukascopy = volume de ticks ; crypto/actions hors scope actuel.
+  barrier ATR, features prix/tendance/momentum/vol/calendrier, **un modèle
+  par actif — tranché**). Les deux **pré-requis moteur** (clôture forcée de
+  fin de semaine + barrières intrabar) sont **livrés** (moteur v2). Volume
+  forex Dukascopy = volume de ticks ; crypto/actions hors scope actuel.
+- **Module features de Couleuvre livré** (étape 2 de la spec) :
+  `pyea/strategies/strategy_couleuvre_features.py`. `compute_features(frame)`
+  → 34 features vectorisées (`FEATURE_COLUMNS`, ordre figé) sur un OHLCV
+  ré-échantillonné : retours log, position dans le range, gap d'ouverture,
+  SMA/EMA/MACD/ADX, RSI/stochastique/ROC, ATR/vol réalisée/Bollinger/ratio
+  de vol, volume relatif/spike/OBV z-score, calendrier (dow, jours avant
+  vendredi, heure, session FX). **Sans fuite temporelle** (fenêtres
+  strictement causales) — garantie par un test de **stabilité par préfixe**.
+  Mono-symbole (un LightGBM/actif) : pas de feature classe d'actif ni
+  cross-asset (DXY/VIX/macro = v2). Fenêtres = constantes de module
+  (définition du modèle, pas de config). `WARMUP_BARS` = historique mini.
 - **Squelettes vides** (NotImplementedError) à développer plus tard :
-  logique LightGBM de `CouleuvreV01` (train/warmup/on_tick — spec dans
-  docs/strategie_couleuvre.md), `InteractiveBrokersGateway` (appels
-  ib_async réels), `MarketDataFeed`.
+  logique LightGBM de `CouleuvreV01` (train/warmup/on_tick — features déjà
+  prêtes ci-dessus ; reste labeling triple-barrier + fit + seuils),
+  `InteractiveBrokersGateway` (appels ib_async réels), `MarketDataFeed`.
 
 ## Points de vigilance (audit modularité 2026-07-18)
 
@@ -310,3 +320,21 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
   Frames sans high/low (tests) : barrières retombent sur le close, donc
   neutres. 6 tests ajoutés (TP/SL long, TP short, stop prioritaire,
   bougie d'entrée exclue, clôture vendredi), 51 tests verts.
+- **2026-07-19** — Module features de Couleuvre (étape 2). Décisions :
+  (1) **un LightGBM par actif — tranché** (la spec laissait le choix
+  ouvert) ⇒ module **mono-symbole**, aucune feature « classe d'actif »
+  (inutile) ni cross-asset (DXY/S&P/VIX) ni macro (NFP/CPI), reportées en
+  v2 (source externe requise). (2) **Anti-fuite** érigé en invariant
+  testable : toutes les fenêtres sont causales (rolling/ewm/shift/diff
+  arrière), vérifié par **stabilité par préfixe**
+  (`features(frame)[:k] == features(frame[:k])`) — plus robuste qu'une
+  relecture visuelle. (3) **Fenêtres = constantes de module**, pas de
+  config : elles font partie de la définition du modèle `couleuvre_v0_1`
+  (versionnées avec la stratégie), pas des réglages runtime. (4) Zéro
+  dépendance TA externe (RSI/ATR/ADX/MACD/Bollinger/stochastique/OBV
+  réimplémentés, lissage de Wilder = ewm alpha 1/n) ; `numpy` explicité
+  dans requirements. (5) Emplacement `strategies/strategy_couleuvre_*`
+  (préfixe = package). (6) Features **scale-invariantes** autant que
+  possible (ratios, retours log, MACD/ATR normalisés par le close) pour
+  rester comparables entre régimes. 10 tests, 61 verts. Prochaine étape :
+  labeling triple-barrier + `CouleuvreV01.train()` (fit LightGBM).

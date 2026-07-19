@@ -18,6 +18,7 @@ lightgbm>=4.3
 
 # Données historiques (download_history.py) & backtest
 pandas>=2.2
+numpy>=1.26          # features de Couleuvre (import direct, sinon transitif via pandas)
 pyarrow>=16.0
 
 # Tests

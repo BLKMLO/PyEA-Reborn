@@ -27,10 +27,11 @@
     sur l'historique pour `CouleuvreV01.train()`.
 - **Validation** : walk-forward — ✅ déjà en place
   (`pyea/training/training_walkforward.py`, fenêtre expansive).
-- **Modèle** : un LightGBM par actif ou par classe d'actif (préférable
-  selon l'ébauche, dynamiques différentes) — à trancher à
-  l'implémentation ; le stockage par run (`data/models/<run>/`) est prêt
-  pour l'un comme l'autre.
+- **Modèle** : ✅ **tranché — un LightGBM par actif** (décision
+  utilisateur 2026-07-19). Conséquence directe sur les features : module
+  mono-symbole, pas de feature « classe d'actif » (inutile) ni cross-asset
+  (v2). Le stockage par run (`data/models/<run>/`) accueillera un modèle
+  par symbole.
 
 ## Features prévues
 
@@ -74,9 +75,15 @@
 1. ✅ Moteur de backtest : clôture forcée du vendredi + barrières intrabar
    (high/low) — pré-requis d'honnêteté des métriques. **Fait** (v2 du
    moteur, `Signal.stop_loss`/`take_profit`).
-2. Module features (`pyea/strategies/` ou `pyea/training/`) : calcul
-   vectorisé sur DataFrame M1 ré-échantillonné, SANS fuite temporelle
-   (uniquement des fenêtres passées).
+2. ✅ Module features (`pyea/strategies/strategy_couleuvre_features.py`) :
+   calcul vectorisé sur DataFrame OHLCV ré-échantillonné, SANS fuite
+   temporelle (fenêtres strictement causales). **Fait** —
+   `compute_features(frame)` → 34 features (`FEATURE_COLUMNS`, ordre figé),
+   `WARMUP_BARS`. Anti-fuite garantie par un test de stabilité par préfixe
+   (`compute_features(frame)[:k] == compute_features(frame[:k])`).
+   Mono-symbole (un LightGBM par actif) : **aucune** feature « classe
+   d'actif » ni cross-asset (DXY/S&P/VIX) ni macro (NFP/CPI) — reportées
+   en v2 (source de données externe).
 3. Labeling triple-barrier + `CouleuvreV01.train()` (fit LightGBM,
    sauvegarde `model.txt` + features dans `data/models/<run>/`).
 4. `warmup()` (chargement du modèle choisi) et `on_tick()` (features
