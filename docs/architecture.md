@@ -63,7 +63,7 @@ PyEA-Reborn/
 │   │   ├── api_pages.py                   # Pages HTML : / (live), /backtest, /training (Jinja2 + HTMX).
 │   │   ├── api_rest.py                    # REST : status, symbols, trading/{symbol}, positions, logs, charts.
 │   │   ├── api_backtest.py                # REST : /api/backtest/datasets et /api/backtest/run.
-│   │   ├── api_training.py                # REST : /api/training/run, jobs/{id}, runs, definition/{strategy}.
+│   │   ├── api_training.py                # REST : /api/training/run, current-job, jobs/{id}, runs, definition/{strategy}.
 │   │   └── api_websocket.py               # WebSocket /ws : relais du bus vers les navigateurs.
 │   │
 │   └── web/

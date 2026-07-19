@@ -64,3 +64,37 @@ def test_load_history_relit_les_parquets(tmp_path: Path) -> None:
     loaded = load_history(tmp_path, "EURUSD")
     assert len(loaded) == 2
     assert loaded["bid_close"].iloc[1] == 1.2
+
+
+def test_load_history_ne_lit_que_les_annees_de_la_periode(tmp_path: Path) -> None:
+    """Avec start/end, seuls les fichiers d'années chevauchant la période
+    sont lus (charger 15 ans de M1 pour 6 mois gaspillait temps et mémoire).
+    Le résultat reste identique à un chargement complet + slice."""
+    import pandas as pd
+
+    for year in (2019, 2020, 2021):
+        frame = pd.DataFrame(
+            {"bid_close": [float(year), float(year) + 0.5]},
+            index=pd.to_datetime([f"{year}-03-01 00:00", f"{year}-09-01 00:00"], utc=True),
+        )
+        target = year_file_path(tmp_path, "EURUSD", year)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        frame.to_parquet(target)
+
+    start = pd.Timestamp("2020-01-01", tz="UTC")
+    end = pd.Timestamp("2020-12-31", tz="UTC")
+    loaded = load_history(tmp_path, "EURUSD", start, end)
+    assert list(loaded["bid_close"]) == [2020.0, 2020.5]
+
+    # Borne ouverte d'un côté : les années postérieures/antérieures suivent.
+    assert len(load_history(tmp_path, "EURUSD", start, None)) == 4
+    assert len(load_history(tmp_path, "EURUSD", None, end)) == 4
+
+    # Période entièrement hors historique → erreur claire, pas de frame vide.
+    import pytest
+
+    with pytest.raises(FileNotFoundError):
+        load_history(
+            tmp_path, "EURUSD",
+            pd.Timestamp("2025-01-01", tz="UTC"), pd.Timestamp("2025-12-31", tz="UTC"),
+        )

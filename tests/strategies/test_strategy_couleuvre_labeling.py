@@ -65,3 +65,68 @@ def test_index_non_temporel_rejete() -> None:
     frame = pd.DataFrame({"bid_close": [1.0, 1.1, 1.2]})
     with pytest.raises(TypeError):
         triple_barrier_labels(frame)
+
+
+def _labels_reference(frame: pd.DataFrame, atr_mult: float, max_hold_days: int):
+    """Réimplémentation naïve bougie par bougie (spécification du labeling),
+    étalon de l'implémentation vectorisée par chunks."""
+    from pyea.strategies.strategy_couleuvre_features import atr_series
+
+    high = frame["bid_high"].to_numpy()
+    low = frame["bid_low"].to_numpy()
+    close = frame["bid_close"].to_numpy()
+    atr = atr_series(frame).to_numpy()
+    ts = frame.index.asi8
+    horizon = max_hold_days * 86_400 * 1_000_000_000
+    n = len(frame)
+    labels = np.full(n, np.nan)
+    barriers = np.empty(n, dtype=object)
+    for t in range(n):
+        if not np.isfinite(atr[t]) or atr[t] <= 0:
+            continue
+        upper = close[t] + atr_mult * atr[t]
+        lower = close[t] - atr_mult * atr[t]
+        end = np.searchsorted(ts, ts[t] + horizon, side="right") - 1
+        if end <= t:
+            continue
+        label, barrier = None, None
+        for j in range(t + 1, end + 1):
+            up_hit, down_hit = high[j] >= upper, low[j] <= lower
+            if up_hit and down_hit:
+                label, barrier = (1, "tp") if close[j] >= close[t] else (0, "sl")
+                break
+            if up_hit:
+                label, barrier = 1, "tp"
+                break
+            if down_hit:
+                label, barrier = 0, "sl"
+                break
+        if label is None:
+            label, barrier = (1 if close[end] >= close[t] else 0), "time"
+        labels[t] = label
+        barriers[t] = barrier
+    return labels, barriers
+
+
+def test_scan_par_chunks_identique_a_la_reference() -> None:
+    """L'optimisation par chunks numpy doit produire EXACTEMENT les mêmes
+    labels/barrières que le scan bougie par bougie, y compris la règle de
+    départage quand les deux barrières tombent dans la même bougie."""
+    rng = np.random.default_rng(3)
+    n = 600
+    index = pd.date_range("2024-01-01", periods=n, freq="1h", tz="UTC")
+    close = 1.0 * np.exp(np.cumsum(rng.normal(0, 0.002, n)))
+    # Grandes mèches : force des cas où les DEUX barrières sont dans la
+    # même bougie (départage par le close) et des franchissements tardifs.
+    wick = np.abs(rng.normal(0, 0.004, n))
+    frame = pd.DataFrame(
+        {"bid_high": close + wick, "bid_low": close - wick, "bid_close": close},
+        index=index,
+    )
+    lab = triple_barrier_labels(frame)
+    ref_labels, ref_barriers = _labels_reference(frame, 1.5, 5)
+    np.testing.assert_array_equal(lab["label"].to_numpy(), ref_labels)
+    defined = ~np.isnan(ref_labels)  # hors labels indéfinis (None vs NaN)
+    assert list(lab["barrier"].to_numpy()[defined]) == list(ref_barriers[defined])
+    # Le jeu couvre bien les trois issues (sinon le test ne prouve rien).
+    assert {"tp", "sl"} <= set(lab["barrier"].dropna())

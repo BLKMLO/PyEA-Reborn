@@ -278,7 +278,9 @@ async function loadStatus() {
 
 function initWebSocket() {
   const statusEl = document.getElementById("ws-status");
-  const ws = new WebSocket(`ws://${window.location.host}/ws`);
+  // wss derrière HTTPS (reverse proxy sur un VPS) — ws:// y serait bloqué.
+  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+  const ws = new WebSocket(`${protocol}://${window.location.host}/ws`);
   ws.onopen = () => { statusEl.textContent = "WS : connecté"; };
   ws.onclose = () => { statusEl.textContent = "WS : déconnecté"; };
   ws.onmessage = (event) => {

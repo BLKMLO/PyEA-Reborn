@@ -86,6 +86,21 @@ def list_runs(limit: int = 50) -> list[dict[str, Any]]:
         ]
 
 
+def fail_orphan_runs() -> int:
+    """Marque « failed » les runs restés « running » (serveur arrêté en plein
+    entraînement : le thread meurt avec le processus, la ligne ne serait
+    jamais mise à jour et resterait « running » pour toujours dans
+    l'historique). À appeler au démarrage. Retourne le nombre de runs marqués."""
+    with get_session() as session:
+        orphans = session.scalars(
+            select(TrainingRun).where(TrainingRun.status == "running")
+        ).all()
+        for run in orphans:
+            run.status = "failed"
+        session.commit()
+        return len(orphans)
+
+
 def make_run_id(strategy_name: str) -> str:
     """Identifiant lisible et trié chronologiquement : <strategie>-<horodatage>."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")

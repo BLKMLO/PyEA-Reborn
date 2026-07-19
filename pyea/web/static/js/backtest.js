@@ -45,6 +45,18 @@ async function loadDatasets() {
 
 // --- Exécution -------------------------------------------------------------
 
+// Erreur API lisible : FastAPI renvoie soit une chaîne (HTTPException),
+// soit un tableau d'objets (erreur de validation 422) — sans ce garde-fou,
+// l'utilisateur voyait « [object Object] ».
+function apiErrorText(payload) {
+  const detail = payload && payload.detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail.map(e => `${(e.loc || []).join(".")} : ${e.msg}`).join(" ; ");
+  }
+  return "erreur inattendue du serveur.";
+}
+
 async function runBacktest() {
   const button = document.getElementById("bt-run");
   const message = document.getElementById("bt-message");
@@ -67,12 +79,13 @@ async function runBacktest() {
       body: JSON.stringify(body),
     });
     if (!response.ok) {
-      const error = await response.json();
-      message.textContent = `Erreur : ${error.detail}`;
+      message.textContent = `Erreur : ${apiErrorText(await response.json())}`;
       return;
     }
     renderResults(await response.json());
     message.textContent = "";
+  } catch (error) {
+    message.textContent = `Erreur réseau : ${error.message}`;
   } finally {
     button.disabled = false;
   }

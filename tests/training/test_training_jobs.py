@@ -32,6 +32,24 @@ def test_job_echec_capture_l_erreur() -> None:
     assert "boum" in job.error
 
 
+def test_current_expose_le_job_en_cours() -> None:
+    """`current()` sert au ré-attachement de l'interface après un
+    rechargement de page pendant un run."""
+    manager = TrainingJobManager()
+    assert manager.current() is None
+
+    def long_running(progress, cancelled):
+        while not cancelled():
+            time.sleep(0.02)
+        return {"cancelled": True}
+
+    job = manager.start(long_running, None)
+    assert manager.current() is job
+    manager.cancel(job.id)
+    _wait(job)
+    assert manager.current() is None
+
+
 def test_job_annulation() -> None:
     manager = TrainingJobManager()
 

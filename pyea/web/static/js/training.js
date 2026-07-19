@@ -40,6 +40,18 @@ function statCard(label, value, colored) {
     </div>`;
 }
 
+// Erreur API lisible : FastAPI renvoie soit une chaîne (HTTPException),
+// soit un tableau d'objets (erreur de validation 422) — sans ce garde-fou,
+// l'utilisateur voyait « [object Object] ».
+function apiErrorText(payload) {
+  const detail = payload && payload.detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail.map(e => `${(e.loc || []).join(".")} : ${e.msg}`).join(" ; ");
+  }
+  return "erreur inattendue du serveur.";
+}
+
 // --- Formulaire + définition du modèle -------------------------------------
 
 async function loadDatasets() {
@@ -94,38 +106,84 @@ async function runTraining() {
   const message = document.getElementById("tr-message");
   button.disabled = true;
   message.textContent = "";
+  // Retour visuel IMMÉDIAT : le serveur charge l'historique avant de
+  // répondre (plusieurs secondes sur un gros M1) — sans cela, le clic
+  // semblait ne rien faire.
+  setProgress({ message: "Chargement de l'historique…" });
   const body = {
     symbol: document.getElementById("tr-symbol").value,
     timeframe: document.getElementById("tr-timeframe").value,
     strategy: document.getElementById("tr-strategy").value,
-    folds: parseInt(document.getElementById("tr-folds").value, 10) || 4,
+    folds: Math.min(20, Math.max(1, parseInt(document.getElementById("tr-folds").value, 10) || 4)),
   };
   const start = document.getElementById("tr-start").value;
   const end = document.getElementById("tr-end").value;
   if (start) body.start = start;
   if (end) body.end = end;
 
-  const response = await fetch("/api/training/run", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) {
-    message.textContent = `Erreur : ${(await response.json()).detail}`;
+  try {
+    const response = await fetch("/api/training/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      message.textContent = `Erreur : ${apiErrorText(await response.json())}`;
+      button.disabled = false;
+      document.getElementById("tr-progress-wrap").classList.add("hidden");
+      return;
+    }
+    currentJobId = (await response.json()).job_id;
+  } catch (error) {
+    message.textContent = `Erreur réseau : ${error.message}`;
     button.disabled = false;
+    document.getElementById("tr-progress-wrap").classList.add("hidden");
     return;
   }
-  currentJobId = (await response.json()).job_id;
   setProgress({ message: "Démarrage…" });
+  startPolling();
+}
+
+function startPolling() {
+  if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(pollJob, 2000);
 }
 
+// Au chargement de la page : si un entraînement tourne déjà (page rechargée
+// ou rouverte en plein run), on se RÉ-ATTACHE — progression, annulation et
+// résultat restent accessibles au lieu d'un bouton muet répondant « un
+// entraînement est déjà en cours ».
+async function resumeRunningJob() {
+  try {
+    const response = await fetch("/api/training/current-job");
+    if (!response.ok) return;
+    const job = (await response.json()).job;
+    if (!job || job.status !== "running") return;
+    currentJobId = job.id;
+    document.getElementById("tr-run").disabled = true;
+    setProgress(
+      Object.keys(job.progress || {}).length
+        ? job.progress
+        : { message: "Entraînement en cours…" }
+    );
+    startPolling();
+  } catch {
+    // Serveur injoignable : la page reste utilisable, l'utilisateur relancera.
+  }
+}
+
 async function pollJob() {
-  const response = await fetch(`/api/training/jobs/${currentJobId}`);
-  if (!response.ok) return;
-  const job = await response.json();
+  let job;
+  try {
+    const response = await fetch(`/api/training/jobs/${currentJobId}`);
+    if (!response.ok) return;
+    job = await response.json();
+  } catch {
+    return; // erreur réseau passagère : on retentera au prochain tick
+  }
   if (job.status === "running") return;
   clearInterval(pollTimer);
+  pollTimer = null;
   document.getElementById("tr-run").disabled = false;
   document.getElementById("tr-progress-wrap").classList.add("hidden");
   const message = document.getElementById("tr-message");
@@ -141,23 +199,35 @@ async function pollJob() {
 }
 
 async function cancelTraining() {
-  if (currentJobId) await fetch(`/api/training/jobs/${currentJobId}`, { method: "DELETE" });
+  if (!currentJobId) return;
+  document.getElementById("tr-progress-text").textContent = "Annulation demandée…";
+  await fetch(`/api/training/jobs/${currentJobId}`, { method: "DELETE" });
 }
 
 // --- Progression (WebSocket + polling) -------------------------------------
 
 function setProgress(payload) {
   const wrap = document.getElementById("tr-progress-wrap");
+  // Le message final « done » (fin de job) ne doit pas RÉ-AFFICHER la barre
+  // que pollJob vient de masquer — c'est pollJob qui rend le résultat.
+  if (payload.phase === "done") {
+    wrap.classList.add("hidden");
+    return;
+  }
   wrap.classList.remove("hidden");
   const percent = payload.total
     ? Math.round(((payload.fold - (payload.phase === "train" ? 1 : 0.5)) / payload.total) * 100)
-    : 100;
-  document.getElementById("tr-progress-bar").style.width = `${Math.max(2, percent)}%`;
+    : 3; // pas encore de plis : barre « amorcée », pas pleine
+  document.getElementById("tr-progress-bar").style.width = `${Math.max(3, percent)}%`;
   document.getElementById("tr-progress-text").textContent = payload.message || payload.phase || "";
 }
 
 function initTrainingWebSocket() {
-  const ws = new WebSocket(`ws://${window.location.host}/ws`);
+  const statusEl = document.getElementById("ws-status");
+  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+  const ws = new WebSocket(`${protocol}://${window.location.host}/ws`);
+  ws.onopen = () => { statusEl.textContent = "WS : connecté"; };
+  ws.onclose = () => { statusEl.textContent = "WS : déconnecté"; };
   ws.onmessage = (event) => {
     const data = JSON.parse(event.data);
     if (data.topic === "training.progress" && data.payload.job_id === currentJobId) {
@@ -256,4 +326,5 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("tr-run").addEventListener("click", runTraining);
   document.getElementById("tr-cancel").addEventListener("click", cancelTraining);
   document.getElementById("tr-strategy").addEventListener("change", (e) => loadModelDefinition(e.target.value));
+  await resumeRunningJob(); // page rechargée pendant un run → ré-attachement
 });

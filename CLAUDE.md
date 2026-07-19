@@ -163,9 +163,16 @@ jamais commité — modèle dans `.env.example`).
   `training.js`) : walk-forward à fenêtre expansive
   (`pyea/training/training_walkforward.py`, plis de test consécutifs,
   jamais de split aléatoire), exécution en **job de thread**
-  (`training_jobs.py`, un seul job actif à la fois, annulable),
+  (`training_jobs.py`, un seul job actif à la fois, annulable — annulation
+  re-vérifiée ENTRE les phases d'un pli, pas seulement entre plis),
   progression **temps réel** via bus topic `training.progress` → WebSocket
-  (+ polling `GET /api/training/jobs/{id}` en secours). Chaque run est
+  (+ polling `GET /api/training/jobs/{id}` en secours). Le **chargement de
+  l'historique vit DANS le job** (phase « Chargement… ») : le POST répond
+  immédiatement, la boucle asyncio ne gèle jamais. **Reprise après
+  rechargement de page** : `GET /api/training/current-job` + ré-attachement
+  automatique de l'UI (progression/annulation retrouvées). Les runs restés
+  « running » après un arrêt serveur sont marqués « failed » au démarrage
+  (`fail_orphan_runs`). Chaque run est
   historisé en SQLite (table `training_runs` : params, métriques OOS,
   statut) avec artefacts dans `data/models/<run>/` (metadata.json +
   `model.txt`/`features.json` par pli). Hook `Strategy.train(frame, params)`
@@ -220,6 +227,15 @@ jamais commité — modèle dans `.env.example`).
   paquet côté utilisateur. `requirements.txt` documente désormais la
   commande de secours et recommande Python 3.11/3.12 pour éviter le
   problème (voir « Notes environnement utilisateur »).
+- **2026-07-19** — Passe de fiabilisation après premiers retours de test
+  utilisateur (« impossible d'entraîner ») : chargement des données déplacé
+  dans le job (plus de gel de la boucle asyncio ni de clic « sans effet »),
+  reprise de job après rechargement de page (`/api/training/current-job`),
+  annulation réactive, runs orphelins nettoyés au démarrage, labeling
+  triple-barrier ~16× plus rapide (scan numpy par chunks, sortie prouvée
+  identique), `load_history` ne lit que les années de la période, le
+  téléchargeur survit à une année en échec (résumé en fin de run), erreurs
+  422 lisibles côté UI, `wss://` derrière HTTPS. 80 tests verts.
 - **Squelettes vides** (NotImplementedError) à développer plus tard :
   `InteractiveBrokersGateway` (appels ib_async réels), `MarketDataFeed`.
 
@@ -242,6 +258,31 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
    raccourci stratégie→broker, même « pour tester »).
 
 ## Journal de décisions
+
+- **2026-07-19** — Fiabilisation post-retours de test (l'utilisateur n'a
+  « même pas pu entraîner »). Cause racine reproduite en navigateur : le
+  POST `/api/training/run` chargeait l'historique DANS la boucle asyncio
+  (UI entièrement gelée pendant des secondes/minutes) et, après un
+  rechargement de page en plein run, le job devenait invisible — bouton
+  muet répondant « un entraînement est déjà en cours », sans progression ni
+  annulation possible. Décisions : (1) le chargement des données devient la
+  **première phase du job** (POST immédiat, phase « Chargement… » visible,
+  période invalide/trop courte = échec de job avec message clair — le 404
+  « aucun historique » reste synchrone) ; (2) **ré-attachement UI** via
+  `GET /api/training/current-job` au chargement de la page ; (3) annulation
+  re-vérifiée entre les phases d'un pli ; (4) `fail_orphan_runs()` au
+  démarrage (un arrêt serveur laissait des runs « running » à jamais) ;
+  (5) labeling triple-barrier en **chunks numpy** (~16×, test d'équivalence
+  contre une réimplémentation naïve, départage stop/TP inclus) ;
+  (6) `load_history` filtre les fichiers par année de la période ;
+  (7) téléchargeur : une année en échec est journalisée et sautée (résumé
+  final) au lieu de faire crasher tout le run de plusieurs heures ;
+  (8) front : erreurs de validation 422 rendues lisibles (fini
+  « [object Object] »), `wss://` si HTTPS, indicateur WS honnête (vide sur
+  les pages sans WebSocket), fetch robustes aux erreurs réseau, barre de
+  progression non ré-affichée par le message « done ». Validé en
+  navigateur (Playwright) : feedback immédiat au clic, reprise après
+  reload, annulation, run complet — zéro erreur console. 80 tests verts.
 
 - **2026-07-18** — Scaffold initial (branche `claude/new-session-b0govl`).
   Choix : FastAPI + HTMX/Tailwind/Chart.js via CDN (zéro build front) ;

@@ -57,8 +57,16 @@ class TrainingJobManager:
         self._lock = threading.Lock()
 
     def has_running_job(self) -> bool:
+        return self.current() is not None
+
+    def current(self) -> TrainingJob | None:
+        """Le job en cours d'exécution, ou ``None``. Sert à l'interface pour
+        se ré-attacher à un run après un rechargement de page."""
         with self._lock:
-            return any(job.status == "running" for job in self._jobs.values())
+            for job in self._jobs.values():
+                if job.status == "running":
+                    return job
+        return None
 
     def start(self, target: JobTarget, loop: asyncio.AbstractEventLoop | None) -> TrainingJob:
         """Démarre ``target`` dans un thread. ``loop`` = boucle asyncio du

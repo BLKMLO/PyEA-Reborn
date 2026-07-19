@@ -244,6 +244,7 @@ async def download_history(
     (sauf ``force``) ; l'année en cours est toujours re-téléchargée.
     """
     written: dict[str, list[int]] = {symbol: [] for symbol in symbols}
+    failed: list[tuple[str, int, str]] = []
     current_year = date.today().year
     semaphore = asyncio.Semaphore(concurrency)
 
@@ -255,7 +256,16 @@ async def download_history(
                 if target.exists() and not force and year != current_year:
                     logger.info("%s %d déjà présent, sauté.", symbol, year)
                     continue
-                frame = await download_year(client, semaphore, symbol, year)
+                # Une année en échec (réseau après retries, fichier corrompu…)
+                # ne doit PAS faire perdre les heures de téléchargement déjà
+                # faites : on journalise, on continue, on résume à la fin —
+                # relancer le script ne reprendra que les années manquantes.
+                try:
+                    frame = await download_year(client, semaphore, symbol, year)
+                except Exception as exc:  # noqa: BLE001 — résumé en fin de run.
+                    logger.error("%s %d : échec (%s) — année sautée.", symbol, year, exc)
+                    failed.append((symbol, year, str(exc)))
+                    continue
                 if frame.empty:
                     logger.warning("%s %d : aucune donnée (historique indisponible ?).", symbol, year)
                     continue
@@ -267,6 +277,12 @@ async def download_history(
                     symbol, year, len(frame), target,
                     frame.index[0], frame["bid_close"].iloc[0],
                 )
+    if failed:
+        logger.warning(
+            "%d année(s) en échec — relancer le script pour les reprendre : %s",
+            len(failed),
+            ", ".join(f"{symbol} {year}" for symbol, year, _ in failed),
+        )
     return written
 
 
@@ -320,12 +336,28 @@ def load_history(
     start: datetime | None = None,
     end: datetime | None = None,
 ) -> pd.DataFrame:
-    """Recharge l'historique M1 d'un symbole (pour le backtest à venir)."""
+    """Recharge l'historique M1 d'un symbole (backtest / entraînement)."""
     files = sorted((data_dir / symbol).glob(f"{symbol}_m1_*.parquet"))
     if not files:
         raise FileNotFoundError(
             f"Aucun historique pour {symbol} dans {data_dir} — "
             "lancer `python download_history.py` d'abord."
         )
+    # Ne lit que les fichiers d'années chevauchant [start, end] : charger
+    # 15 ans de M1 pour un backtest de 6 mois gaspille temps et mémoire.
+    if start is not None or end is not None:
+        def year_of(file: Path) -> int:
+            return int(file.stem.rsplit("_", 1)[1])
+
+        files = [
+            file
+            for file in files
+            if (start is None or year_of(file) >= start.year)
+            and (end is None or year_of(file) <= end.year)
+        ]
+        if not files:
+            raise FileNotFoundError(
+                f"Aucun historique pour {symbol} sur la période demandée."
+            )
     frame = pd.concat(pd.read_parquet(file) for file in files).sort_index()
     return frame.loc[start:end]
