@@ -130,9 +130,15 @@ jamais commité — modèle dans `.env.example`).
   gain, drawdown max), courbe d'équité (Chart.js) et table des trades.
   Moteur : `pyea/backtest/backtest_engine.py` — rejoue bougie par bougie
   via le flux complet `Strategy → Signal → RiskManager → OrderRequest`
-  (exécution simulée, modèle v1 : tick au bid_close, pas de spread ni
-  slippage, liquidation en fin de période, courbe d'équité ≤ 500 points).
-  Couleuvre étant muette, un run rend honnêtement 0 trade.
+  (exécution simulée, **modèle v2** : décision prise au bid_close, pas de
+  spread ni slippage, **barrières TP/SL testées en intrabar** high/low sur
+  chaque bougie suivante — stop supposé prioritaire si les deux sont dans
+  la même bougie —, **clôture forcée à la dernière bougie de la semaine
+  ISO** (jamais de portage week-end), liquidation en fin de période,
+  courbe d'équité ≤ 500 points). Les barrières transitent par le domaine :
+  `Signal.stop_loss`/`take_profit` → RiskManager → `OrderRequest`. Frames
+  sans high/low (tests) : barrières neutralisées sur le close. Couleuvre
+  étant muette, un run rend honnêtement 0 trade.
 - `RiskManager.evaluate` **v1 implémentée** (plus un squelette) : HOLD
   ignoré, EXIT → ordre inverse de la position ouverte, entrées à taille
   fixe `risk.max_position_size` refusées au-delà de
@@ -153,9 +159,10 @@ jamais commité — modèle dans `.env.example`).
 - **Spécification de Couleuvre v0.1** fournie par l'utilisateur :
   `docs/strategie_couleuvre.md` (swing intra-semaine 2-5 j, triple
   barrier ATR, features prix/tendance/momentum/vol/calendrier, un modèle
-  par actif). Annotations importantes : clôture forcée du vendredi et
-  barrières intrabar = **pré-requis moteur avant d'entraîner** ; volume
-  forex Dukascopy = volume de ticks ; crypto/actions hors scope actuel.
+  par actif). Les deux **pré-requis moteur** (clôture forcée de fin de
+  semaine + barrières intrabar) sont **livrés** (moteur v2) ; reste le
+  labeling triple-barrier sur l'historique pour `train()`. Volume forex
+  Dukascopy = volume de ticks ; crypto/actions hors scope actuel.
 - **Squelettes vides** (NotImplementedError) à développer plus tard :
   logique LightGBM de `CouleuvreV01` (train/warmup/on_tick — spec dans
   docs/strategie_couleuvre.md), `InteractiveBrokersGateway` (appels
@@ -279,8 +286,27 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
   d'événements sert enfin à quelque chose (point de vigilance n°1 —
   `job_manager` est d'ailleurs un singleton de module du même statut).
   Ébauche de features utilisateur consignée et annotée dans
-  `docs/strategie_couleuvre.md` — deux évolutions moteur identifiées
-  comme PRÉ-REQUIS avant l'entraînement réel : clôture forcée avant le
-  week-end et barrières TP/SL intrabar (triple-barrier). Validation
+  `docs/strategie_couleuvre.md` — les deux évolutions moteur qui étaient
+  PRÉ-REQUIS avant l'entraînement réel (clôture forcée de fin de semaine
+  et barrières TP/SL intrabar / triple-barrier) sont désormais **livrées**
+  (moteur v2, cf. section backtest). Validation
   navigateur : run 5 plis, 11 trames WS `training.progress`, historique
   persistant, zéro erreur console.
+- **2026-07-19** — Moteur de backtest v2 : les deux pré-requis moteur de
+  Couleuvre livrés (étape 1 de `docs/strategie_couleuvre.md`). Décisions :
+  (1) **barrières TP/SL portées par le domaine** — `Signal.stop_loss`/
+  `take_profit` (optionnels) → reportés par le RiskManager sur
+  l'`OrderRequest`, testés en **intrabar** (high/low) par le moteur.
+  Rationale architecture : un fill de barrière n'est PAS un ordre
+  contournant le risque, c'est l'exécution d'un ordre bracket déjà validé
+  à l'ouverture (règle #1 respectée) ; en live, ces champs deviendront un
+  bracket IB. (2) **Convention conservatrice** : si stop ET take-profit
+  sont dans la même bougie, on suppose le **stop** touché d'abord (ordre
+  intrabar réel inconnu, on pénalise). (3) **Clôture de fin de semaine**
+  détectée par changement de semaine **ISO** entre bougies consécutives
+  (le forex Dukascopy n'a pas de bougie le week-end) — robuste aux
+  frontières d'année ; garde `entry_time != timestamp` pour éviter un
+  aller-retour dégénéré ; ce plafond borne aussi l'horizon 2-5 j. (4)
+  Frames sans high/low (tests) : barrières retombent sur le close, donc
+  neutres. 6 tests ajoutés (TP/SL long, TP short, stop prioritaire,
+  bougie d'entrée exclue, clôture vendredi), 51 tests verts.

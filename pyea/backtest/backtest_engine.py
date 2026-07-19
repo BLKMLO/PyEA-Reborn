@@ -6,11 +6,23 @@ live : ``Strategy → Signal → RiskManager → OrderRequest`` — l'exécution
 est simulée ici au lieu de partir chez le broker, mais aucun ordre ne
 contourne le risk manager, même en simulation.
 
-Modèle d'exécution v1 (volontairement simple, à raffiner plus tard) :
-- un « tick » par bougie, au prix de clôture bid ;
+Modèle d'exécution v2 (toujours simple, à raffiner plus tard) :
+- un « tick » par bougie, au prix de clôture bid — les décisions de la
+  stratégie sont prises au close ;
 - exécution immédiate au même prix (pas de slippage ni de spread) ;
 - une position à la fois par backtest (plafond du RiskManager) ;
+- **barrières intrabar (triple-barrier)** : si l'ordre porte un
+  ``stop_loss`` / ``take_profit``, chaque bougie SUIVANTE est testée sur
+  son high/low ; un franchissement clôture la position au prix de la
+  barrière (pas au close). Si les deux barrières sont dans la même bougie,
+  on suppose le stop touché d'abord (hypothèse conservatrice) ;
+- **clôture forcée de fin de semaine** : une position encore ouverte à la
+  dernière bougie de la semaine ISO est liquidée à son close (Couleuvre
+  est un swing intra-semaine, jamais de portage sur le week-end) ;
 - position résiduelle liquidée à la dernière bougie.
+
+Frames sans high/low (ex. données de test réduites à ``bid_close``) : les
+barrières retombent sur le close, ce qui les neutralise proprement.
 """
 
 from __future__ import annotations
@@ -29,6 +41,27 @@ from pyea.strategies.strategy_base import Strategy
 logger = get_logger(__name__)
 
 MAX_EQUITY_POINTS = 500  # Taille max de la courbe renvoyée à l'interface.
+
+
+def _last_bars_of_week(index: pd.DatetimeIndex) -> list[bool]:
+    """Marque, pour chaque bougie, si elle est la dernière de sa semaine ISO.
+
+    Le forex Dukascopy n'a pas de bougie le week-end : une semaine se
+    termine simplement quand la bougie suivante bascule sur une autre
+    (année, semaine) ISO — robuste aux frontières d'année. La toute
+    dernière bougie de la série reste ``False`` : la liquidation finale la
+    couvre déjà (pas de double clôture).
+    """
+    n = len(index)
+    if n == 0:
+        return []
+    iso = index.isocalendar()
+    keys = list(zip(iso["year"].to_numpy(), iso["week"].to_numpy()))
+    flags = [False] * n
+    for i in range(n - 1):
+        if keys[i] != keys[i + 1]:
+            flags[i] = True
+    return flags
 
 
 @dataclass(frozen=True)
@@ -78,6 +111,8 @@ class _OpenPosition:
     quantity: float
     entry_time: datetime
     entry_price: float
+    stop_loss: float | None = None
+    take_profit: float | None = None
 
     @property
     def signed_quantity(self) -> float:
@@ -86,6 +121,25 @@ class _OpenPosition:
     def pnl_at(self, price: float) -> float:
         direction = 1 if self.side == OrderSide.BUY else -1
         return (price - self.entry_price) * direction * self.quantity
+
+    def barrier_exit(self, high: float, low: float) -> float | None:
+        """Prix de sortie si une barrière est franchie dans [low, high], sinon None.
+
+        Convention conservatrice : si stop ET take-profit sont tous deux
+        dans le range de la bougie, on retient le stop (perte supposée
+        touchée en premier, l'ordre intrabar réel étant inconnu).
+        """
+        if self.side == OrderSide.BUY:
+            if self.stop_loss is not None and low <= self.stop_loss:
+                return self.stop_loss
+            if self.take_profit is not None and high >= self.take_profit:
+                return self.take_profit
+        else:  # SELL : stop au-dessus, take-profit en dessous.
+            if self.stop_loss is not None and high >= self.stop_loss:
+                return self.stop_loss
+            if self.take_profit is not None and low <= self.take_profit:
+                return self.take_profit
+        return None
 
 
 class BacktestEngine:
@@ -101,15 +155,31 @@ class BacktestEngine:
         result = BacktestResult(symbol=symbol, timeframe=timeframe, bars=len(frame))
         position: _OpenPosition | None = None
         realized = 0.0
-        equity_step = max(1, len(frame) // MAX_EQUITY_POINTS)
+        n = len(frame)
+        equity_step = max(1, n // MAX_EQUITY_POINTS)
+        last_of_week = _last_bars_of_week(frame.index)
+        has_hl = "bid_high" in frame.columns and "bid_low" in frame.columns
 
         await self._strategy.warmup({})
         try:
             for i, (timestamp, row) in enumerate(frame.iterrows()):
                 price = float(row["bid_close"])
+                high = float(row["bid_high"]) if has_hl else price
+                low = float(row["bid_low"]) if has_hl else price
+
+                # 1) Barrières intrabar : une position ouverte à une bougie
+                # ANTÉRIEURE (le check tourne avant l'entrée de cette bougie)
+                # est clôturée si le high/low franchit son stop / take-profit.
+                if position is not None:
+                    barrier_price = position.barrier_exit(high, low)
+                    if barrier_price is not None:
+                        position, realized = self._close_position(
+                            result, position, realized, timestamp, barrier_price
+                        )
+
+                # 2) Décision de la stratégie, prise au close.
                 tick = TickData(symbol=symbol, price=price, timestamp=timestamp)
                 signal = await self._strategy.on_tick(tick)
-
                 if signal is not None:
                     open_positions = (
                         [
@@ -128,21 +198,28 @@ class BacktestEngine:
                             result, position, realized, order, timestamp, price
                         )
 
-                if i % equity_step == 0 or i == len(frame) - 1:
+                # 3) Clôture forcée de fin de semaine (jamais de portage
+                # week-end). Le garde entry_time évite un aller-retour
+                # dégénéré si l'entrée vient d'avoir lieu sur cette bougie.
+                if (
+                    position is not None
+                    and last_of_week[i]
+                    and position.entry_time != timestamp
+                ):
+                    position, realized = self._close_position(
+                        result, position, realized, timestamp, price
+                    )
+
+                if i % equity_step == 0 or i == n - 1:
                     unrealized = position.pnl_at(price) if position else 0.0
                     result.equity_curve.append((timestamp, round(realized + unrealized, 5)))
 
             # Liquidation de la position résiduelle sur la dernière bougie.
-            if position is not None and len(frame):
+            if position is not None and n:
                 last_time = frame.index[-1]
                 last_price = float(frame["bid_close"].iloc[-1])
-                close_order = OrderRequest(
-                    symbol=symbol,
-                    side=OrderSide.SELL if position.side == OrderSide.BUY else OrderSide.BUY,
-                    quantity=position.quantity,
-                )
-                position, realized = self._execute(
-                    result, position, realized, close_order, last_time, last_price
+                position, realized = self._close_position(
+                    result, position, realized, last_time, last_price
                 )
         finally:
             await self._strategy.shutdown()
@@ -170,14 +247,28 @@ class BacktestEngine:
                     quantity=order.quantity,
                     entry_time=timestamp,
                     entry_price=price,
+                    stop_loss=order.stop_loss,
+                    take_profit=order.take_profit,
                 ),
                 realized,
             )
         # Ordre opposé à la position ouverte = clôture.
+        return self._close_position(result, position, realized, timestamp, price)
+
+    def _close_position(
+        self,
+        result: BacktestResult,
+        position: _OpenPosition,
+        realized: float,
+        timestamp: datetime,
+        price: float,
+    ) -> tuple[None, float]:
+        """Clôt la position (signal opposé, barrière, fin de semaine ou
+        liquidation finale) et enregistre l'aller-retour."""
         pnl = position.pnl_at(price)
         result.trades.append(
             BacktestTrade(
-                symbol=order.symbol,
+                symbol=result.symbol,
                 side=position.side.value,
                 quantity=position.quantity,
                 entry_time=position.entry_time,

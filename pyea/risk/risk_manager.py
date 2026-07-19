@@ -59,6 +59,13 @@ class RiskManager:
             if signal.action == SignalAction.ENTER_LONG
             else OrderSide.SELL
         )
+        # Les barrières proposées par la stratégie (triple-barrier) sont
+        # reportées sur l'ordre : leur exécution ultérieure (TP/SL touché)
+        # découle de cet ordre déjà validé, elle ne contourne pas le risque.
         return OrderRequest(
-            symbol=signal.symbol, side=side, quantity=self._max_position_size
+            symbol=signal.symbol,
+            side=side,
+            quantity=self._max_position_size,
+            stop_loss=signal.stop_loss,
+            take_profit=signal.take_profit,
         )

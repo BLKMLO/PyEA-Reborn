@@ -11,18 +11,20 @@
 - **Horizon** : swing court, 2 à 5 jours.
 - **Contrainte clé** : positions fermées avant le week-end (pas de swap,
   pas de gap non maîtrisé). Fenêtre lundi → vendredi.
-  - ⚠ PyEA : le moteur de backtest v1 ne force pas encore la clôture du
-    vendredi — à ajouter au moteur AVANT de backtester Couleuvre
-    honnêtement (sinon les gaps de week-end polluent les métriques).
+  - ✅ PyEA : le moteur (`backtest_engine.py`) force désormais la clôture à
+    la dernière bougie de la semaine ISO (aucun portage sur le week-end) —
+    ce plafond temporel borne aussi l'horizon 2-5 j intra-semaine.
 - **Actifs** : l'ébauche vise « Forex, Crypto, Actions ».
   - ⚠ PyEA : le périmètre actuel est celui de la watchlist (forex,
     métaux, indices — données Dukascopy, exécution IB). Crypto/actions =
     hors scope tant qu'aucun broker/flux ne les couvre.
 - **Labeling** : triple barrier (TP/SL proportionnels à l'ATR + horizon
   max en jours).
-  - ⚠ PyEA : le triple-barrier exige de tester TP/SL en INTRABAR
-    (high/low), pas au close — 2e évolution du moteur requise (v1 = tick
-    au bid_close uniquement).
+  - ✅ PyEA (exécution) : le moteur teste désormais TP/SL en INTRABAR
+    (high/low de chaque bougie suivante) ; un `Signal` porte
+    `stop_loss`/`take_profit`, reportés par le RiskManager sur l'ordre.
+    Reste côté labeling/entraînement : produire ces labels triple-barrier
+    sur l'historique pour `CouleuvreV01.train()`.
 - **Validation** : walk-forward — ✅ déjà en place
   (`pyea/training/training_walkforward.py`, fenêtre expansive).
 - **Modèle** : un LightGBM par actif ou par classe d'actif (préférable
@@ -69,8 +71,9 @@
 
 ## Ordre d'implémentation proposé
 
-1. Moteur de backtest : clôture forcée du vendredi + barrières intrabar
-   (high/low) — pré-requis d'honnêteté des métriques.
+1. ✅ Moteur de backtest : clôture forcée du vendredi + barrières intrabar
+   (high/low) — pré-requis d'honnêteté des métriques. **Fait** (v2 du
+   moteur, `Signal.stop_loss`/`take_profit`).
 2. Module features (`pyea/strategies/` ou `pyea/training/`) : calcul
    vectorisé sur DataFrame M1 ré-échantillonné, SANS fuite temporelle
    (uniquement des fenêtres passées).

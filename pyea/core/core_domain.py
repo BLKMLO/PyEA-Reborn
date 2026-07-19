@@ -45,24 +45,39 @@ class TickData:
 
 @dataclass(frozen=True)
 class Signal:
-    """Décision émise par une stratégie, à valider par le risk management."""
+    """Décision émise par une stratégie, à valider par le risk management.
+
+    ``stop_loss`` / ``take_profit`` : niveaux de prix des barrières
+    proposées par la stratégie (triple-barrier de Couleuvre — TP/SL
+    proportionnels à l'ATR). Optionnels : une stratégie sans barrières les
+    laisse à ``None``. Le RiskManager les reporte sur l'``OrderRequest``.
+    """
 
     strategy_name: str
     symbol: str
     action: SignalAction
     confidence: float | None = None
+    stop_loss: float | None = None
+    take_profit: float | None = None
     timestamp: datetime = field(default_factory=_utcnow)
 
 
 @dataclass(frozen=True)
 class OrderRequest:
-    """Ordre demandé au broker (après validation risque)."""
+    """Ordre demandé au broker (après validation risque).
+
+    ``stop_loss`` / ``take_profit`` : barrières de l'ordre bracket, validées
+    par le RiskManager. En live elles deviendront des ordres attachés (IB
+    bracket) ; en backtest le moteur les teste en intrabar (high/low).
+    """
 
     symbol: str
     side: OrderSide
     quantity: float
     order_type: OrderType = OrderType.MARKET
     limit_price: float | None = None
+    stop_loss: float | None = None
+    take_profit: float | None = None
 
 
 @dataclass(frozen=True)

@@ -40,7 +40,8 @@ PyEA-Reborn/
 │   │
 │   ├── backtest/
 │   │   └── backtest_engine.py             # Rejoue l'historique via le flux complet
-│   │                                      # Strategy → RiskManager → ordre simulé.
+│   │                                      # Strategy → RiskManager → ordre simulé
+│   │                                      # (barrières TP/SL intrabar, clôture fin de semaine).
 │   │
 │   ├── training/
 │   │   ├── training_walkforward.py        # Découpe walk-forward + orchestration train/test.
