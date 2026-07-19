@@ -136,7 +136,11 @@ def compute_features(frame: pd.DataFrame) -> pd.DataFrame:
     vol_mean = volume.rolling(VOLUME_WINDOW).mean()
     vol_std = volume.rolling(VOLUME_WINDOW).std()
     feats["vol_rel_20"] = volume / vol_mean
-    feats["vol_spike_20"] = (volume - vol_mean) / vol_std
+    # Volume à variance nulle (certains flux de test/indices) → spike = 0,
+    # jamais NaN : sinon une colonne entièrement NaN ferait tout sauter au
+    # dropna de l'entraînement. Les NaN de chauffe (std indéfinie) restent.
+    spike = (volume - vol_mean) / vol_std
+    feats["vol_spike_20"] = spike.where(vol_std != 0, 0.0)
     feats["obv_z_20"] = _obv_zscore(close, volume, VOLUME_WINDOW)
 
     # --- Calendrier / saisonnalité ----------------------------------------
@@ -146,6 +150,18 @@ def compute_features(frame: pd.DataFrame) -> pd.DataFrame:
     result = pd.DataFrame(feats, index=frame.index)
     result = result.replace([np.inf, -np.inf], np.nan)
     return result[FEATURE_COLUMNS]  # ordre canonique + garde-fou complétude
+
+
+def atr_series(frame: pd.DataFrame, period: int = ATR_PERIOD) -> pd.Series:
+    """ATR de Wilder **brut** (non normalisé) aligné sur ``frame``.
+
+    Source de vérité de l'ATR pour tout Couleuvre : le labeling
+    triple-barrier (placement des barrières sur l'historique) ET
+    l'inférence (dimensionnement des barrières TP/SL à l'entrée) l'utilisent
+    — mêmes valeurs des deux côtés, aucune divergence train/exécution.
+    """
+    _, high, low, close, _ = _ohlcv(frame)
+    return _atr(high, low, close, period)
 
 
 # --------------------------------------------------------------------------

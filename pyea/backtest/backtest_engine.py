@@ -160,7 +160,14 @@ class BacktestEngine:
         last_of_week = _last_bars_of_week(frame.index)
         has_hl = "bid_high" in frame.columns and "bid_low" in frame.columns
 
-        await self._strategy.warmup({})
+        # Le frame complet est fourni à warmup : une stratégie à modèle
+        # (Couleuvre) y pré-calcule ses features/probas. Le calcul reste
+        # sans fuite — la décision à la bougie t ne lit QUE la ligne t, et
+        # features(t) est identique qu'on la calcule sur tout le frame ou
+        # sur son seul préfixe (stabilité par préfixe garantie et testée).
+        await self._strategy.warmup(
+            {"symbol": symbol, "timeframe": timeframe, "frame": frame}
+        )
         try:
             for i, (timestamp, row) in enumerate(frame.iterrows()):
                 price = float(row["bid_close"])

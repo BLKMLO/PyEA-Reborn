@@ -53,6 +53,33 @@ développe le raisonnement pour celles qui structurent le projet.
   (`data/models/<run>/`) — sans historique comparable, impossible de
   savoir si un modèle progresse.
 
+- **Couleuvre : LightGBM natif, label binaire symétrique, features
+  pré-calculées** (cf. `docs/strategie_couleuvre.md`) :
+  - *API Booster native* (`lgb.train`) plutôt que le wrapper scikit-learn
+    (`LGBMClassifier`) : évite d'ajouter `scikit-learn` aux dépendances
+    pour un simple `fit`/`predict` ; l'AUC in-sample est calculée à la main
+    (Mann–Whitney, `numpy`).
+  - *Un seul modèle binaire pour les deux sens* : le label triple-barrier
+    est `1` si la barrière haute est touchée avant la basse (barrières
+    symétriques à `mult·ATR`). `P(haute d'abord)` élevée → long, faible →
+    short : un modèle sert les deux, au lieu d'en entraîner deux. Les
+    barrières du labeling et de l'exécution partagent le même multiple
+    d'ATR (aucune divergence train/exécution).
+  - *Features pré-calculées dans `warmup`* (le moteur fournit le frame),
+    puis lues ligne à ligne dans `on_tick`. C'est plus rapide qu'un calcul
+    incrémental ET **exactement identique** : la stabilité par préfixe des
+    features (testée) garantit que `features(t)` ne dépend jamais du futur,
+    donc précalcul sur tout le frame == calcul sur le seul passé. La
+    décision à la bougie `t` ne lit que la ligne `t`.
+  - *In-sample = optimiste, seul l'OOS juge* : sur du **bruit pur**, le
+    modèle atteint ~0,96 d'AUC in-sample mais ~50 % de taux de gain OOS
+    (test de non-régression `test_pas_de_fuite_pnl_nul_sur_bruit`). D'où la
+    colonne « AUC IS » affichée en regard du taux de gain OOS par pli :
+    l'écart entre les deux est le diagnostic direct de surapprentissage.
+  - *Un modèle par actif, entraîné manuellement* : chaque paire se forme
+    via la page backtest (un symbole par run) ; le walk-forward
+    out-of-sample de cette page EST le test de qualité de la paire.
+
 - **Dukascopy comme source d'historique** (plutôt qu'IB ou yfinance) :
   flux public gratuit sans compte, M1 remontant avant 2010 sur le forex ;
   IB exige TWS connecté et impose des limites de débit sévères sur

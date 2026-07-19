@@ -113,7 +113,14 @@ def run_walkforward(
         progress({"fold": i + 1, "total": n_folds, "phase": "train",
                   "message": f"Pli {i + 1}/{n_folds} : entraînement…"})
         strategy = strategy_factory()
-        fold.train_report = asyncio.run(strategy.train(train_frame, {"fold": i + 1}))
+        # Chaque pli sauvegarde son modèle (model.txt + features.json) dans
+        # un sous-dossier — artefacts inspectables, un modèle par actif/pli.
+        fold.train_report = asyncio.run(
+            strategy.train(
+                train_frame,
+                {"fold": i + 1, "model_dir": str(artifacts_dir / f"fold_{i + 1}")},
+            )
+        )
 
         progress({"fold": i + 1, "total": n_folds, "phase": "test",
                   "message": f"Pli {i + 1}/{n_folds} : backtest out-of-sample…"})

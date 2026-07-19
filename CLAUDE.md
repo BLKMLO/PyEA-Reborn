@@ -173,9 +173,26 @@ jamais commité — modèle dans `.env.example`).
   Mono-symbole (un LightGBM/actif) : pas de feature classe d'actif ni
   cross-asset (DXY/VIX/macro = v2). Fenêtres = constantes de module
   (définition du modèle, pas de config). `WARMUP_BARS` = historique mini.
+- **Couleuvre_v0.1 opérationnelle de bout en bout** (étapes 3-5) :
+  `strategy_couleuvre_labeling.py` (triple-barrier, **label binaire
+  symétrique** = 1 si barrière haute touchée avant la basse) +
+  `CouleuvreV01.train/warmup/on_tick`. `train` : features causales + labels
+  alignés puis `dropna` (retire chauffe ET queue sans label → sans fuite),
+  fit LightGBM natif (`P(haute d'abord)`), sauvegarde `model.txt` +
+  `features.json` par pli dans `data/models/<run>/fold_<i>/`, rapport
+  (accuracy/AUC in-sample, balance, top features). `warmup` : le moteur
+  fournit le frame → features/ATR/probas pré-calculés (exact et sans fuite,
+  cf. stabilité par préfixe). `on_tick` : proba de la bougie → seuils
+  (0.55/0.45) → ENTER_LONG/SHORT avec barrières TP/SL au même multiple
+  d'ATR que le labeling. **Un modèle par actif, entraîné manuellement**
+  (un symbole par run). **Comment tester une paire** : le walk-forward OOS
+  de la page backtest EST le test ; la colonne **AUC IS** (in-sample)
+  affichée en regard du taux de gain OOS par pli rend le surapprentissage
+  visible. **Non-fuite prouvée** : sur bruit pur, AUC in-sample ~0,96 mais
+  taux de gain OOS ~50 % (test `test_pas_de_fuite_pnl_nul_sur_bruit`).
+  Validé sur historique synthétique local (Dukascopy bloqué) — taux réels
+  à juger sur vraies données.
 - **Squelettes vides** (NotImplementedError) à développer plus tard :
-  logique LightGBM de `CouleuvreV01` (train/warmup/on_tick — features déjà
-  prêtes ci-dessus ; reste labeling triple-barrier + fit + seuils),
   `InteractiveBrokersGateway` (appels ib_async réels), `MarketDataFeed`.
 
 ## Points de vigilance (audit modularité 2026-07-18)
@@ -338,3 +355,32 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
   possible (ratios, retours log, MACD/ATR normalisés par le close) pour
   rester comparables entre régimes. 10 tests, 61 verts. Prochaine étape :
   labeling triple-barrier + `CouleuvreV01.train()` (fit LightGBM).
+- **2026-07-19** — Couleuvre étapes 3-5 (labeling + train + inférence,
+  livrées ensemble). Décisions : (1) **label binaire symétrique** : 1 si la
+  barrière haute est touchée avant la basse (barrières symétriques à
+  `mult·ATR`). Un seul modèle sert les deux sens (`P(haute d'abord)` haute →
+  long, basse → short) au lieu d'en entraîner deux ; barrières identiques
+  au labeling et à l'exécution (aucune divergence). (2) **API LightGBM
+  native** (`lgb.train`) et non le wrapper sklearn → pas de dépendance
+  `scikit-learn` ; AUC in-sample calculée à la main (Mann–Whitney, numpy).
+  (3) **Inférence par pré-calcul dans `warmup`** (le moteur passe désormais
+  le frame à `warmup`) : plus rapide qu'un calcul incrémental et
+  **exactement égal** grâce à la stabilité par préfixe des features
+  (précalcul sur tout le frame == calcul sur le seul passé, la décision à
+  `t` ne lit que la ligne `t`). (4) **Étapes 3 et 4 livrées ensemble** :
+  sans `on_tick`, le walk-forward ne produit aucun trade → rien à valider.
+  (5) **Non-fuite prouvée par un test adverse** : entraîné puis backtesté
+  OOS sur bruit pur, AUC in-sample ~0,96 mais taux de gain OOS ~50 %
+  (`test_pas_de_fuite_pnl_nul_sur_bruit`) — démonstration vivante que seul
+  l'OOS juge. (6) **UI** : colonne « AUC IS » par pli en regard du taux de
+  gain OOS (l'écart = surapprentissage) — réponse à « comment voir si
+  l'entraînement est bon sur la paire » (pas de bouton séparé : le
+  walk-forward EST le test). (7) **Labeling dans `strategies/`** (et non
+  `training/`) pour éviter un cycle d'import strategies→training, et parce
+  que les multiples de barrière font partie de la définition du modèle.
+  (8) **Robustesse** : volume à variance nulle → `vol_spike` = 0 (jamais
+  NaN, sinon une colonne tout-NaN ferait sauter tout l'entraînement au
+  `dropna`) — bug trouvé sur les données synthétiques locales. Validé de
+  bout en bout dans le navigateur (EURUSD H1, 3 plis, table OOS + AUC IS,
+  zéro erreur console). 12 tests ajoutés, **73 verts**. `lightgbm` doit
+  être installé (déjà dans requirements). Reste : gateway IB + feed réels.

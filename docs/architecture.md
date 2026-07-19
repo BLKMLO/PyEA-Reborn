@@ -30,9 +30,11 @@ PyEA-Reborn/
 │   │   └── data_history_downloader.py     # Historique M1 Dukascopy → Parquet (+ load/resample).
 │   │
 │   ├── strategies/
-│   │   ├── strategy_base.py               # Contrat abstrait Strategy (warmup / on_tick / shutdown).
+│   │   ├── strategy_base.py               # Contrat abstrait Strategy (warmup / on_tick / shutdown / train).
 │   │   ├── strategy_registry.py           # Registre plugin : @register_strategy, lookup par nom.
-│   │   └── strategy_couleuvre_v0_1.py     # Couleuvre_v0.1 (LightGBM) — squelette vide typé.
+│   │   ├── strategy_couleuvre_features.py # 34 features causales (sans fuite) + ATR brut.
+│   │   ├── strategy_couleuvre_labeling.py # Labeling triple-barrier (label binaire symétrique).
+│   │   └── strategy_couleuvre_v0_1.py     # Couleuvre_v0.1 : train (LightGBM) / warmup / on_tick.
 │   │
 │   ├── risk/
 │   │   └── risk_manager.py                # Seul module qui transforme un Signal en OrderRequest

@@ -84,9 +84,38 @@
    Mono-symbole (un LightGBM par actif) : **aucune** feature « classe
    d'actif » ni cross-asset (DXY/S&P/VIX) ni macro (NFP/CPI) — reportées
    en v2 (source de données externe).
-3. Labeling triple-barrier + `CouleuvreV01.train()` (fit LightGBM,
-   sauvegarde `model.txt` + features dans `data/models/<run>/`).
-4. `warmup()` (chargement du modèle choisi) et `on_tick()` (features
-   incrémentales + seuils de décision → Signal).
-5. Walk-forward complet sur la page backtest, décisions sur les métriques
-   **out-of-sample uniquement**.
+3. ✅ Labeling triple-barrier (`strategy_couleuvre_labeling.py`) +
+   `CouleuvreV01.train()` : **fait**. Label binaire symétrique
+   (1 = barrière haute d'abord), fit LightGBM (`P(haute d'abord)`),
+   sauvegarde `model.txt` + `features.json` par pli dans
+   `data/models/<run>/fold_<i>/`.
+4. ✅ `warmup()` (frame fourni par le moteur → features/ATR/probas
+   pré-calculés ; charge un `model.txt` en live) et `on_tick()` (proba de la
+   bougie → seuils `ENTER_LONG_THRESHOLD`/`ENTER_SHORT_THRESHOLD`, barrières
+   TP/SL dimensionnées au même multiple d'ATR que le labeling) : **fait**.
+   Livré avec l'étape 3 car sans inférence le walk-forward ne testerait
+   rien.
+5. ✅ Walk-forward complet sur la page backtest — **opérationnel** : décider
+   sur les métriques **out-of-sample uniquement**. La colonne « AUC IS »
+   (in-sample) affichée en regard du taux de gain OOS par pli rend l'écart
+   de généralisation (surapprentissage) visible d'un coup d'œil.
+
+## Comment vérifier qu'un modèle est bon sur une paire
+
+Il n'y a pas de « bouton test » séparé : **le walk-forward de la page
+backtest EST le test**. Pour une paire :
+
+1. Section « Entraînement » → choisir le symbole, le timeframe, le nombre
+   de plis, lancer.
+2. Lire les **métriques out-of-sample** (trades, P&L, taux de gain,
+   drawdown) — jamais l'in-sample, toujours optimiste.
+3. Comparer, par pli, **AUC IS** (skill in-sample, proche de 1 = le modèle
+   mémorise) au **taux de gain OOS** : un grand écart = surapprentissage,
+   des valeurs cohérentes = apprentissage sain. Un modèle qui « trade
+   beaucoup mais gagne ~50 % en OOS » ne capte rien d'exploitable.
+4. L'historique des runs (table du bas) permet de comparer plusieurs
+   configurations sur la même paire.
+
+⚠ Validé jusqu'ici sur historique **synthétique local** (Dukascopy bloqué
+en sandbox) : le pipeline est correct et sans fuite (prouvé sur bruit pur),
+mais les taux de gain réels ne se jugeront que sur de vraies données.

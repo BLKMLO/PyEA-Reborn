@@ -229,16 +229,21 @@ function renderTraining(report) {
     statCard("P&L OOS", stats.total_pnl, true) +
     statCard("Taux de gain OOS", stats.win_rate === null ? null : `${(stats.win_rate * 100).toFixed(1)} %`) +
     statCard("Drawdown max OOS", stats.max_drawdown);
-  document.getElementById("tr-folds-body").innerHTML = report.folds.map(fold => `
+  document.getElementById("tr-folds-body").innerHTML = report.folds.map(fold => {
+    const tr = fold.train_report || {};
+    const aucIs = tr.train_auc != null ? tr.train_auc.toFixed(3) : "—";
+    return `
     <tr class="border-t border-slate-700/60">
       <td class="py-1 pr-2">${fold.index}</td>
       <td class="pr-2">${fold.train_bars}</td>
+      <td class="pr-2 text-slate-400">${aucIs}</td>
       <td class="pr-2">${fold.test_start.slice(0, 10)} → ${fold.test_end.slice(0, 10)}</td>
       <td class="pr-2">${fold.test_stats.trades}</td>
       <td class="pr-2 ${fold.test_stats.total_pnl >= 0 ? "text-emerald-400" : "text-red-400"}">${fold.test_stats.total_pnl}</td>
       <td class="pr-2">${fold.test_stats.win_rate === null ? "—" : (fold.test_stats.win_rate * 100).toFixed(1) + " %"}</td>
       <td>${fold.test_stats.max_drawdown}</td>
-    </tr>`).join("");
+    </tr>`;
+  }).join("");
 }
 
 async function loadRuns() {
