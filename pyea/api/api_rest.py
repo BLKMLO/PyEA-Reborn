@@ -55,19 +55,28 @@ async def get_status() -> dict[str, Any]:
 
 @router.get("/symbols")
 async def get_symbols() -> dict[str, Any]:
-    """Watchlist du dashboard : chaque symbole + badge « en trading ».
+    """Watchlist du dashboard (façon « Market Watch ») : chaque symbole +
+    dernier prix + variation sur 24 h + badge « en trading ».
 
     Watchlist = history.instruments ; « en trading » = interrupteur
-    par symbole (bouton Trading/Stopped), persisté en base.
+    par symbole (bouton Trading/Stopped), persisté en base. Prix et
+    variation sont des données de DÉMO déterministes (_demo_quote),
+    cohérentes avec les bougies du graphique (même marche aléatoire).
     """
     settings = get_settings()
     states = get_trading_states()
-    return {
-        "symbols": [
-            {"symbol": symbol, "trading": states.get(symbol, False)}
-            for symbol in settings.history_instruments
-        ],
-    }
+    symbols = []
+    for symbol in settings.history_instruments:
+        last, change_pct = _demo_quote(symbol)
+        symbols.append(
+            {
+                "symbol": symbol,
+                "trading": states.get(symbol, False),
+                "last": last,
+                "change_pct": change_pct,
+            }
+        )
+    return {"symbols": symbols}
 
 
 class TradingToggle(BaseModel):
@@ -155,6 +164,30 @@ def _demo_candles(symbol: str, end_minute: int, points: int) -> list[dict[str, f
             )
         price = close
     return candles
+
+
+def _demo_quote(symbol: str) -> tuple[float, float]:
+    """Dernier prix et variation sur ~24 h (démo déterministe).
+
+    Rejoue la MÊME marche aléatoire que ``_demo_candles`` (seed
+    symbole+minute) depuis l'origine fixe jusqu'à maintenant : le prix
+    renvoyé est donc exactement le close de la dernière bougie du
+    graphique. La variation compare le prix courant à celui d'il y a
+    1440 minutes (une « journée » de démo).
+    """
+    origin = _demo_origin_minute()
+    now_minute = int(datetime.now(timezone.utc).timestamp() // 60)
+    base = _base_price(symbol)
+    day_ago_minute = now_minute - 1440
+    price = base
+    reference = base  # avant un jour complet d'historique : pas de variation
+    for minute in range(origin, now_minute + 1):
+        rng = random.Random(f"{symbol}:{minute}")
+        price = price + rng.uniform(-1, 1) * base * 0.0008
+        if minute == day_ago_minute:
+            reference = price
+    change_pct = (price - reference) / reference * 100 if reference else 0.0
+    return round(price, 5), round(change_pct, 2)
 
 
 @router.get("/charts/price-history")

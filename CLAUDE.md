@@ -115,8 +115,16 @@ jamais commité — modèle dans `.env.example`).
 - Dashboard live façon TradingView : chandeliers M1 au centre
   (**TradingView Lightweight Charts** : pan/zoom natifs, historique
   paginé via `?before=`, refresh incrémental `series.update` qui
-  préserve le défilement), watchlist à droite (clic = onglet, pastille
-  verte = paire armée), **bouton Trading (vert) / Stopped (rouge)** par
+  préserve le défilement), **légende OHLC en surimpression** (suit le
+  crosshair, retombe sur la dernière bougie « vivante » hors survol,
+  variation intra-bougie colorée) + état « Chargement… » au changement
+  d'onglet, watchlist à droite **façon « Market Watch »** (clic = onglet,
+  pastille verte = paire armée, **dernier prix + variation 24 h colorée**
+  par ligne, servis par `/api/symbols` enrichi via `_demo_quote`,
+  rafraîchis en place toutes les 10 s sans flicker), header en **badges
+  colorés** (pill mode PAPER/LIVE, pastille de connexion broker,
+  stratégie) + indicateur temps réel WS vert/rouge, sens BUY/SELL coloré
+  dans les positions, **bouton Trading (vert) / Stopped (rouge)** par
   paire à côté du titre du graphique — état par symbole persisté en
   SQLite (`storage_trading_state.py`, défaut = Stopped), relu à chaque
   changement d'onglet (`GET /api/trading/{symbol}`), bascule via
@@ -258,6 +266,35 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
    raccourci stratégie→broker, même « pour tester »).
 
 ## Journal de décisions
+
+- **2026-07-20** — Passe d'ergonomie du dashboard live, en s'inspirant des
+  terminaux existants (TradingView / MetaTrader 5). Constat : la page Live
+  était fonctionnelle mais « nue » face aux logiciels pros. Améliorations,
+  toutes conformes à l'architecture (données via `_demo_*`, graphiques dans
+  `static/js/`, libs vendorisées, français). (1) **Légende OHLC en
+  surimpression** (signature TradingView) : `subscribeCrosshairMove` →
+  O/H/L/C + variation intra-bougie colorée ; fige la bougie survolée
+  (`state.hovering`), retombe sur la dernière bougie « vivante » après un
+  `series.update`. (2) **Watchlist « Market Watch »** : `/api/symbols`
+  enrichi de `last` + `change_pct` (helper `_demo_quote`, **même marche
+  aléatoire déterministe** que les bougies → prix watchlist == close du
+  graphique, testé) ; rendu **mis à jour en place** (structure bâtie une
+  fois, seuls prix/variation/pastille changent → pas de flicker, onglet
+  actif préservé), rafraîchi toutes les 10 s. (3) **Header en badges**
+  (mode PAPER bleu / LIVE ambre = prudence, pastille de connexion broker,
+  stratégie) au lieu d'une phrase ; indicateur WS « ● temps réel » vert /
+  « ● hors ligne » rouge (aussi sur la page Entraînement). (4) **Sens
+  BUY/SELL coloré** (vert/rouge) dans les positions (live) et les trades
+  (backtest). (5) **États vides cohérents** : la page Backtest a désormais
+  son placeholder « Lancez un backtest… » (parité avec Entraînement) au
+  lieu de coquilles vides. Décisions de fond : prix de la watchlist calculé
+  côté serveur dans `_demo_quote` (jamais dans le front) pour rester la
+  SEULE source des données de démo (le câblage réel ne touchera que les
+  `_demo_*`) ; refus d'ajouter un sélecteur de timeframe sur le live (le
+  flux ne sert que du M1 démo — ce serait une feature backend, hors passe
+  d'ergonomie). Validé au navigateur (Playwright) : légende au survol,
+  watchlist chiffrée, badges, zéro erreur console sur les 3 pages. 1 test
+  ajouté (cohérence prix watchlist/graphique), **81 verts**.
 
 - **2026-07-19** — Fiabilisation post-retours de test (l'utilisateur n'a
   « même pas pu entraîner »). Cause racine reproduite en navigateur : le

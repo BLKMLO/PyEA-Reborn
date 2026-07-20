@@ -226,8 +226,14 @@ function initTrainingWebSocket() {
   const statusEl = document.getElementById("ws-status");
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${protocol}://${window.location.host}/ws`);
-  ws.onopen = () => { statusEl.textContent = "WS : connecté"; };
-  ws.onclose = () => { statusEl.textContent = "WS : déconnecté"; };
+  ws.onopen = () => {
+    statusEl.textContent = "● temps réel";
+    statusEl.className = "text-xs text-emerald-400";
+  };
+  ws.onclose = () => {
+    statusEl.textContent = "● hors ligne";
+    statusEl.className = "text-xs text-red-400";
+  };
   ws.onmessage = (event) => {
     const data = JSON.parse(event.data);
     if (data.topic === "training.progress" && data.payload.job_id === currentJobId) {

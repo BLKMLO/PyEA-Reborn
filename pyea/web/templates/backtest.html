@@ -46,26 +46,32 @@
 
     <!-- Résultats -->
     <main class="flex min-w-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
-      <div id="bt-stats" class="grid grid-cols-2 gap-3 md:grid-cols-5"></div>
-
-      <div class="rounded-lg bg-slate-800 p-3">
-        <h3 class="mb-2 text-sm font-medium text-slate-300">Courbe d'équité</h3>
-        <div class="relative h-64"><canvas id="bt-equity"></canvas></div>
+      <div id="bt-empty" class="rounded-lg bg-slate-800 p-6 text-center text-sm text-slate-500">
+        Lancez un backtest pour voir les résultats.
       </div>
 
-      <div class="min-h-0 flex-1 rounded-lg bg-slate-800 p-3">
-        <h3 class="mb-2 text-sm font-medium text-slate-300">Trades</h3>
-        <div class="max-h-full overflow-y-auto">
-          <table class="w-full text-left text-xs">
-            <thead class="sticky top-0 bg-slate-800 text-slate-400">
-              <tr>
-                <th class="py-1 pr-2">Sens</th><th class="pr-2">Qté</th>
-                <th class="pr-2">Entrée</th><th class="pr-2">Prix entrée</th>
-                <th class="pr-2">Sortie</th><th class="pr-2">Prix sortie</th><th>P&L</th>
-              </tr>
-            </thead>
-            <tbody id="bt-trades"></tbody>
-          </table>
+      <div id="bt-results" class="hidden flex-col gap-3">
+        <div id="bt-stats" class="grid grid-cols-2 gap-3 md:grid-cols-5"></div>
+
+        <div class="rounded-lg bg-slate-800 p-3">
+          <h3 class="mb-2 text-sm font-medium text-slate-300">Courbe d'équité</h3>
+          <div class="relative h-64"><canvas id="bt-equity"></canvas></div>
+        </div>
+
+        <div class="min-h-0 flex-1 rounded-lg bg-slate-800 p-3">
+          <h3 class="mb-2 text-sm font-medium text-slate-300">Trades</h3>
+          <div class="max-h-full overflow-y-auto">
+            <table class="w-full text-left text-xs">
+              <thead class="sticky top-0 bg-slate-800 text-slate-400">
+                <tr>
+                  <th class="py-1 pr-2">Sens</th><th class="pr-2">Qté</th>
+                  <th class="pr-2">Entrée</th><th class="pr-2">Prix entrée</th>
+                  <th class="pr-2">Sortie</th><th class="pr-2">Prix sortie</th><th>P&L</th>
+                </tr>
+              </thead>
+              <tbody id="bt-trades"></tbody>
+            </table>
+          </div>
         </div>
       </div>
     </main>

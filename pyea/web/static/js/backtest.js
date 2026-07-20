@@ -105,6 +105,10 @@ function statCard(label, value, colored) {
 
 function renderResults(result) {
   const stats = result.stats;
+  document.getElementById("bt-empty").classList.add("hidden");
+  const results = document.getElementById("bt-results");
+  results.classList.remove("hidden");
+  results.classList.add("flex");
   document.getElementById("bt-stats").innerHTML =
     statCard("Bougies", stats.bars) +
     statCard("Trades", stats.trades) +
@@ -141,7 +145,7 @@ function renderResults(result) {
 
   const rows = result.trades.map(trade => `
     <tr class="border-t border-slate-700/60">
-      <td class="py-1 pr-2">${trade.side}</td>
+      <td class="py-1 pr-2"><span class="font-semibold ${trade.side === "BUY" ? "text-emerald-400" : "text-red-400"}">${trade.side}</span></td>
       <td class="pr-2">${trade.quantity}</td>
       <td class="pr-2">${trade.entry_time.slice(0, 16).replace("T", " ")}</td>
       <td class="pr-2">${trade.entry_price}</td>

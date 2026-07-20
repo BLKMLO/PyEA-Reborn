@@ -47,6 +47,28 @@ def test_symbols_watchlist() -> None:
     assert response.status_code == 200
     symbols = {item["symbol"] for item in data["symbols"]}
     assert {"EURUSD", "XAUUSD", "US500"} <= symbols
+    # Façon « Market Watch » : chaque ligne porte un prix + variation.
+    eurusd = next(item for item in data["symbols"] if item["symbol"] == "EURUSD")
+    assert {"last", "change_pct", "trading"} <= set(eurusd)
+    assert isinstance(eurusd["last"], (int, float)) and eurusd["last"] > 0
+    assert isinstance(eurusd["change_pct"], (int, float))
+
+
+def test_symbols_prix_coherent_avec_le_graphique() -> None:
+    # Le prix de la watchlist est un vrai close de la série du graphique
+    # (même marche aléatoire déterministe) — pas un nombre indépendant.
+    # On tolère un basculement de minute entre les deux requêtes : le prix
+    # doit égaler le close de l'une des deux dernières bougies.
+    with _client() as client:
+        last = next(
+            item["last"]
+            for item in client.get("/api/symbols").json()["symbols"]
+            if item["symbol"] == "EURUSD"
+        )
+        candles = client.get(
+            "/api/charts/price-history?symbol=EURUSD&points=10"
+        ).json()["candles"]
+    assert last in {candles[-1]["close"], candles[-2]["close"]}
 
 
 def test_trading_toggle_et_verification_au_changement_d_onglet() -> None:
