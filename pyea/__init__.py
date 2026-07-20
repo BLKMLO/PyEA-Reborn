@@ -17,3 +17,17 @@ Packages :
 """
 
 __version__ = "0.1.0"
+
+# --- Dépendances Python vendorisées (lib/) ---------------------------------
+# Certaines libs tierces PURES PYTHON sont embarquées dans ``lib/`` à la racine
+# du dépôt plutôt qu'installées via pip, pour un fonctionnement « zéro install »
+# et hors-ligne (VPS sans internet, install Windows fragile). On les rend
+# importables en préfixant ``sys.path`` dès l'import de ``pyea``, avant tout
+# ``import backtrader``. Seules des libs sans extension native peuvent l'être
+# (backtrader = GPLv3, pur Python) — numba/lightgbm/pyarrow, eux, restent pip.
+import sys as _sys
+from pathlib import Path as _Path
+
+_VENDOR_DIR = _Path(__file__).resolve().parent.parent / "lib"
+if _VENDOR_DIR.is_dir() and str(_VENDOR_DIR) not in _sys.path:
+    _sys.path.insert(0, str(_VENDOR_DIR))

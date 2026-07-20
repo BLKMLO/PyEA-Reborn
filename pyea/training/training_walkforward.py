@@ -132,7 +132,7 @@ def run_walkforward(
         progress({"fold": i + 1, "total": n_folds, "phase": "test",
                   "message": f"Pli {i + 1}/{n_folds} : backtest out-of-sample…"})
         engine = BacktestEngine(strategy, risk_manager)
-        result = asyncio.run(engine.run(symbol, test_frame, timeframe))
+        result = engine.run(symbol, test_frame, timeframe)
         fold.test_stats = result.stats
 
         # Courbe OOS concaténée : chaque pli repart du cumul précédent.

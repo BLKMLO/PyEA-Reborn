@@ -42,8 +42,9 @@ PyEA-Reborn/
 │   │
 │   ├── backtest/
 │   │   └── backtest_engine.py             # Rejoue l'historique via le flux complet
-│   │                                      # Strategy → RiskManager → ordre simulé
-│   │                                      # (barrières TP/SL intrabar, clôture fin de semaine).
+│   │                                      # Strategy → RiskManager → backtrader (exécution +
+│   │                                      # métriques : Sharpe/SQN/profit factor). Barrières
+│   │                                      # TP/SL (Stop/Limit OCO), clôture fin de semaine.
 │   │
 │   ├── training/
 │   │   ├── training_walkforward.py        # Découpe walk-forward + orchestration train/test.
@@ -81,6 +82,9 @@ PyEA-Reborn/
 │           └── vendor/                    # Tailwind, HTMX, Lightweight Charts (chandeliers),
 │                                          # Chart.js (futurs graphiques P&L) — local, pas de CDN.
 │
+├── lib/                                   # Dépendances Python PURES vendorisées (zéro install) :
+│   └── backtrader/                        # Moteur de backtest (GPLv3). pyea/__init__.py préfixe
+│                                          # lib/ dans sys.path avant tout `import backtrader`.
 ├── docs/                                  # Cette documentation.
 └── tests/                                 # Structure miroir de pyea/ (un dossier par package).
 ```

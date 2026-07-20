@@ -39,7 +39,7 @@ def _random_walk(n: int, seed: int) -> pd.DataFrame:
 
 def _run_oos(strategy: CouleuvreV01, frame: pd.DataFrame):
     engine = BacktestEngine(strategy, RiskManager(get_settings()))
-    return asyncio.run(engine.run("TEST", frame, "H1"))
+    return engine.run("TEST", frame, "H1")
 
 
 def test_train_retourne_un_modele_et_un_rapport() -> None:

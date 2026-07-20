@@ -38,6 +38,11 @@ pandas>=2.2
 numpy>=1.26          # features de Couleuvre (import direct, sinon transitif via pandas)
 pyarrow>=16.0
 
+# Moteur de backtest : backtrader (GPLv3, PUR PYTHON) — NON listé ici car
+# VENDORISÉ dans lib/backtrader/ (zéro install, hors-ligne). pyea/__init__.py
+# préfixe lib/ dans sys.path. Aucun pip requis. Pour le mettre à jour :
+# remplacer le dossier lib/backtrader/ par une nouvelle version.
+
 # Tests
 pytest>=8.0
 httpx>=0.27

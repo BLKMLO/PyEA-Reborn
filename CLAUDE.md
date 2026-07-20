@@ -111,7 +111,7 @@ jamais commité — modèle dans `.env.example`).
 ## État du projet
 
 - Échafaudage complet et fonctionnel : serveur web, REST + WebSocket,
-  registres stratégie/broker, SQLAlchemy (SQLite), 106 tests verts.
+  registres stratégie/broker, SQLAlchemy (SQLite), 108 tests verts.
 - Dashboard live façon TradingView : chandeliers M1 au centre
   (**TradingView Lightweight Charts** : pan/zoom natifs, historique
   paginé via `?before=`, refresh incrémental `series.update` qui
@@ -158,17 +158,29 @@ jamais commité — modèle dans `.env.example`).
   `/api/backtest/datasets` qui scanne `data/history/`), exécution via
   `POST /api/backtest/run` (endpoint sync → threadpool FastAPI, ne bloque
   pas le live), résultats = cartes stats (bougies, trades, P&L, taux de
-  gain, drawdown max), courbe d'équité (Chart.js) et table des trades.
-  Moteur : `pyea/backtest/backtest_engine.py` — rejoue bougie par bougie
-  via le flux complet `Strategy → Signal → RiskManager → OrderRequest`
-  (exécution simulée, **modèle v2** : décision prise au bid_close, pas de
-  spread ni slippage, **barrières TP/SL testées en intrabar** high/low sur
-  chaque bougie suivante — stop supposé prioritaire si les deux sont dans
-  la même bougie —, **clôture forcée à la dernière bougie de la semaine
-  ISO** (jamais de portage week-end), liquidation en fin de période,
-  courbe d'équité ≤ 500 points). Les barrières transitent par le domaine :
+  gain, drawdown max **+ Sharpe / SQN / profit factor**), courbe d'équité
+  (Chart.js) et table des trades.
+  Moteur : `pyea/backtest/backtest_engine.py` — **adossé à backtrader**
+  (moteur événementiel éprouvé, GPLv3, pur Python, **vendorisé dans
+  `lib/backtrader/`**, zéro install). L'`BacktestEngine`/`BacktestResult`
+  restent le contrat public ; en interne le **flux PyEA est préservé**
+  (`Strategy → Signal → RiskManager → OrderRequest` DANS le callback par
+  bougie), backtrader ne fait QUE l'exécution + la comptabilité + les
+  métriques. Modèle (fidèle à l'ancien moteur maison, vérifié bougie à
+  bougie — mêmes valeurs de tests) : entrée Market en **cheat-on-close**
+  (décision remplie au bid_close), **barrières TP/SL = ordres Stop (SL) +
+  Limit (TP) natifs OCO** au prix exact, **stop prioritaire** si les deux
+  franchies dans la même bougie (natif backtrader), **clôture forcée fin de
+  semaine ISO** + liquidation finale via ordres Market, courbe d'équité
+  ≤ 500 points. Détails : on ne trade qu'**1 unité** nominale, le P&L
+  linéaire est re-scalé par `max_position_size` (Sharpe/SQN invariants
+  d'échelle) ; `Open` synthétisé = close précédent borné [low,high] (marché
+  continu sans gap) ; une **bougie « fantôme »** (copie de la dernière)
+  permet aux clôtures cheat-on-close du dernier bar de se réaliser ; méthodes
+  async de la stratégie pontées sur une boucle asyncio dédiée (`engine.run`
+  est désormais **synchrone**). Les barrières transitent par le domaine :
   `Signal.stop_loss`/`take_profit` → RiskManager → `OrderRequest`. Frames
-  sans high/low (tests) : barrières neutralisées sur le close. Sur cette
+  sans high/low (tests) : high=low=close → barrières sur le close. Sur cette
   page, Couleuvre n'a pas de modèle chargé (aucun entraînement dans un run
   de backtest simple) → 0 trade honnête ; pour la voir trader, passer par
   la page Entraînement (walk-forward).
@@ -286,6 +298,56 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
    raccourci stratégie→broker, même « pour tester »).
 
 ## Journal de décisions
+
+- **2026-07-20** — **Moteur de backtest maison remplacé par backtrader**
+  (demande utilisateur : « mettre en place un moteur de backtest déjà
+  existant, solide »). Sauvegarde préalable dans la branche
+  `before_backtrade_api` (poussée). Cheminement (l'utilisateur a changé
+  d'option plusieurs fois, chaque étape tranchée par un PROTOTYPE avant
+  d'écrire — leçon Dukascopy « ne jamais livrer un moteur non validé ») :
+  (1) **vectorbt écarté** : ré-écriture vectorielle contournerait le
+  RiskManager (viole la règle #1) ET — surtout — **non vendorisable** :
+  `numba`/`llvmlite` sont des binaires natifs spécifiques OS/Python
+  (impossible à déposer dans `lib/` cross-plateforme), et il ré-introduit
+  `scikit-learn` qu'on avait retiré exprès. (2) **backtesting.py écarté**
+  (prototypé) : remplit TOUJOURS à la bougie SUIVANTE → la validation des
+  barrières **crashe** (SL passé du mauvais côté du fill différé) et la
+  clôture « jamais de week-end » devient impossible (fill lundi). (3)
+  **backtrader retenu** : pur Python (**vendorisé dans `lib/backtrader/`**,
+  zéro install, hors-ligne — répond à la contrainte utilisateur « libs dans
+  le projet » et à la fragilité d'install Windows connue), et son mode
+  **cheat-on-close** remplit au close de décision = modèle PyEA. GPLv3 :
+  aucune obligation tant que PyEA n'est pas distribué (perso/VPS = OK) —
+  consigné. (4) **Design validé bougie à bougie par prototypes** : entrée
+  Market (coc) + barrières **Stop/Limit natifs OCO** au prix exact (fill
+  exact, tie-break stop natif), clôture forcée week-end/finale via ordres
+  Market, **bougie fantôme** (copie de la dernière) pour réaliser les
+  clôtures coc du dernier bar, enregistrement des trades via `notify_trade`
+  (net, robuste au transient coc). On ne trade qu'**1 unité**, P&L re-scalé
+  par `max_position_size` (ratios invariants d'échelle). **Le flux PyEA est
+  préservé** (Strategy→Signal→RiskManager→OrderRequest dans le callback) —
+  la règle #1 n'est PAS assouplie, contrairement à ce qu'aurait imposé
+  vectorbt. (5) **Conséquences traitées** : `BacktestEngine.run` devient
+  **synchrone** (backtrader l'est ; méthodes async de la stratégie pontées
+  sur une boucle dédiée) → appelants adaptés (`api_backtest.py`,
+  `training_walkforward.py`, plus d'`asyncio.run(engine.run)`) ;
+  `sys.path` préfixé de `lib/` dans `pyea/__init__.py` ; `requirements.txt`
+  documente le vendoring (backtrader NON listé en pip) ;
+  `docs/architecture.md` (+ `lib/`, arbo) et `docs/choix_techniques.md`
+  (justification) mis à jour. (6) **Nouvelles métriques** exposées par
+  l'API et la page backtest : **Sharpe** (riskfreerate=0 pour rester
+  invariant d'échelle, sinon le taux dominait le rendement ~0 sur 1 unité),
+  **SQN**, **profit factor**, avg/best/worst trade. Le « drawdown % » de
+  backtrader **écarté** (dilué par le capital nominal → trompeur), seul le
+  drawdown ABSOLU (courbe re-scalée) est gardé. (7) **Fidélité prouvée** :
+  les 10 tests moteur passent avec les **mêmes valeurs** que l'ancien moteur
+  (entrée au close, barrières exactes, tie-break, clôture week-end,
+  liquidation) ; test anti-fuite Couleuvre toujours ~50 % OOS sur bruit
+  (aucune fuite introduite) ; +1 test « métriques avancées ». Validé
+  end-to-end (Couleuvre entraînée → backtest OOS : Sharpe 1.79, SQN 0.95,
+  profit factor 1.10) et au navigateur (page backtest, 8 cartes, zéro
+  erreur console). **108 tests verts.** Reste inchangé : gateway IB +
+  feed live.
 
 - **2026-07-20** — **MetaTrader 5 ajouté comme second broker** (demande
   utilisateur : « ajoute metatrader comme logiciel reliable à PyEA » +
