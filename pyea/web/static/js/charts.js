@@ -27,6 +27,7 @@ const state = {
   refreshSeconds: 5,
   timer: null,
   tradingMode: "paper",   // "live" déclenche une confirmation avant d'armer
+  brokerConnected: false, // aucune action de trading possible si déconnecté
 };
 
 const UP_COLOR = "#34d399";
@@ -196,10 +197,22 @@ function renderTradingButton(enabled) {
   const button = document.getElementById("trading-toggle");
   button.classList.remove("hidden");
   button.dataset.enabled = String(enabled);
+  // Broker déconnecté : on ne peut PAS armer (pas de faux trades). Le bouton
+  // reste visible mais grisé et désactivé — sauf pour désarmer une paire déjà
+  // armée, toujours autorisé (sécurité).
+  const canArm = state.brokerConnected || enabled;
+  button.disabled = !canArm;
   button.textContent = enabled ? "Trading" : "Stopped";
-  button.className = "rounded px-3 py-0.5 text-xs font-semibold " + (enabled
-    ? "bg-emerald-600 text-white hover:bg-emerald-500"
-    : "bg-red-600 text-white hover:bg-red-500");
+  const base = "rounded px-3 py-0.5 text-xs font-semibold ";
+  if (!canArm) {
+    button.className = base + "bg-slate-600 text-slate-400 cursor-not-allowed";
+    button.title = "Broker déconnecté : connectez-vous pour armer une paire.";
+  } else {
+    button.className = base + (enabled
+      ? "bg-emerald-600 text-white hover:bg-emerald-500"
+      : "bg-red-600 text-white hover:bg-red-500");
+    button.title = "";
+  }
 }
 
 async function refreshTradingButton() {
@@ -214,6 +227,10 @@ async function refreshTradingButton() {
 async function toggleTrading() {
   const button = document.getElementById("trading-toggle");
   const target = button.dataset.enabled !== "true";
+  if (target && !state.brokerConnected) {
+    showToast("Broker déconnecté : connectez-vous avant d'armer une paire.", "error");
+    return;
+  }
   if (target && state.tradingMode === "live" &&
       !window.confirm(`Armer le trading LIVE sur ${state.activeSymbol} ?`)) {
     return;
@@ -223,8 +240,16 @@ async function toggleTrading() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ enabled: target }),
   });
-  if (!response.ok) return;
-  renderTradingButton((await response.json()).enabled);
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    showToast(err.detail || "Action de trading refusée.", "error");
+    return;
+  }
+  const enabled = (await response.json()).enabled;
+  renderTradingButton(enabled);
+  showToast(
+    `${state.activeSymbol} : trading ${enabled ? "armé" : "arrêté"}.`,
+    enabled ? "success" : "info");
   loadSymbols(); // synchronise les pastilles de la watchlist
 }
 
@@ -291,21 +316,31 @@ function sideBadge(side, dimmed) {
   return `<span class="font-semibold ${color}">${side}</span>`;
 }
 
-function positionRow(p, closed) {
-  const price = closed ? p.close_price : p.current_price;
-  const rowClass = closed ? "text-slate-500" : "";
-  const statut = closed
-    ? `fermée ${new Date(p.closed_at).toLocaleDateString()}`
-    : "ouverte";
+function openPositionRow(p) {
+  const pnl = p.pnl == null ? "—" : `${p.pnl >= 0 ? "+" : ""}${p.pnl}`;
   return `
-    <tr class="${rowClass} border-t border-slate-700/60">
+    <tr class="border-t border-slate-700/60">
       <td class="py-1 pr-2 font-mono">${p.symbol}</td>
-      <td class="pr-2">${sideBadge(p.side, closed)}</td>
+      <td class="pr-2">${sideBadge(p.side, false)}</td>
       <td class="pr-2">${p.quantity}</td>
-      <td class="pr-2">${p.entry_price}</td>
-      <td class="pr-2">${price}</td>
-      <td class="pr-2 ${closed ? "" : pnlClass(p.pnl)}">${p.pnl >= 0 ? "+" : ""}${p.pnl}</td>
-      <td>${statut}</td>
+      <td class="pr-2">${formatPrice(p.entry_price)}</td>
+      <td class="pr-2">${p.current_price == null ? "—" : formatPrice(p.current_price)}</td>
+      <td class="pr-2 ${p.pnl == null ? "" : pnlClass(p.pnl)}">${pnl}</td>
+      <td>ouverte</td>
+    </tr>`;
+}
+
+// Trade RÉELLEMENT exécuté (journal SQL), grisé comme historique.
+function tradeRow(t) {
+  return `
+    <tr class="border-t border-slate-700/60 text-slate-500">
+      <td class="py-1 pr-2 font-mono">${t.symbol}</td>
+      <td class="pr-2">${sideBadge(t.side, true)}</td>
+      <td class="pr-2">${t.quantity}</td>
+      <td class="pr-2">${t.fill_price == null ? "—" : formatPrice(t.fill_price)}</td>
+      <td class="pr-2">—</td>
+      <td class="pr-2"></td>
+      <td>${t.status.toLowerCase()} ${new Date(t.executed_at).toLocaleDateString()}</td>
     </tr>`;
 }
 
@@ -314,14 +349,22 @@ async function refreshPositions() {
   if (!response.ok) return;
   const data = await response.json();
   const body = document.getElementById("positions-body");
-  body.innerHTML =
-    data.open.map(p => positionRow(p, false)).join("") +
-    data.closed.map(p => positionRow(p, true)).join("");
+  const empty = document.getElementById("positions-empty");
+  const rows = data.open.map(openPositionRow).join("") + data.trades.map(tradeRow).join("");
+  body.innerHTML = rows;
+  // État vide HONNÊTE : rien n'est inventé quand le broker est déconnecté.
+  const isEmpty = !data.open.length && !data.trades.length;
+  empty.classList.toggle("hidden", !isEmpty);
+  if (isEmpty) {
+    empty.textContent = data.broker_connected
+      ? "Aucune position ouverte ni trade exécuté."
+      : "Broker déconnecté — aucune position réelle à afficher.";
+  }
   const total = document.getElementById("total-pnl");
   total.textContent = `${data.total_pnl >= 0 ? "+" : ""}${data.total_pnl}`;
   total.className = `mt-1 text-2xl font-semibold ${pnlClass(data.total_pnl)}`;
   document.getElementById("pnl-detail").textContent =
-    `${data.open.length} ouverte(s) · ${data.closed.length} fermée(s)`;
+    `${data.open.length} ouverte(s) · ${data.trades.length} trade(s) exécuté(s)`;
 }
 
 // --- Onglets du panneau bas ------------------------------------------------
@@ -356,6 +399,8 @@ async function loadStatus() {
   // un intervalle 0 martèlerait l'API en boucle.
   state.refreshSeconds = Math.max(1, status.chart_refresh_seconds || 5);
   state.tradingMode = status.trading_mode;
+  const wasConnected = state.brokerConnected;
+  state.brokerConnected = status.broker_connected;
   // Statut en badges colorés (façon barre d'état d'un terminal de trading) :
   // mode (LIVE en ambre = prudence), connexion broker (pastille), stratégie.
   const live = status.trading_mode === "live";
@@ -367,16 +412,27 @@ async function loadStatus() {
   const credsMark = status.broker_credentials_set
     ? `<span title="Identifiants enregistrés">🔑</span>`
     : "";
+  // Badge DÉMO franc quand les données de marché ne sont pas réelles : le
+  // graphique et les prix de la watchlist sont simulés — pas de tromperie.
+  const demoBadge = status.market_data_live
+    ? ""
+    : `<span class="rounded bg-purple-700 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-purple-100"` +
+      ` title="Données de marché simulées (aucun flux broker connecté)">démo</span>`;
   document.getElementById("header-status").innerHTML =
     `<span class="inline-flex items-center gap-2">` +
     `<span class="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${modePill}">${status.trading_mode}</span>` +
-    `<button id="broker-badge" type="button" title="Configurer les identifiants du broker"` +
+    `<button id="broker-badge" type="button" title="Configurer / connecter le broker"` +
     ` class="inline-flex items-center gap-1 rounded px-1 hover:bg-slate-700">` +
-    `<span class="h-1.5 w-1.5 rounded-full ${brokerDot}"></span>${status.broker}${credsMark}</button>` +
+    `<span class="h-1.5 w-1.5 rounded-full ${brokerDot}"></span>${status.broker}${credsMark}` +
+    `<span class="text-[10px] ${status.broker_connected ? "text-emerald-400" : "text-red-400"}">` +
+    `${status.broker_connected ? "connecté" : "déconnecté"}</span></button>` +
     `<span class="text-slate-500">·</span>` +
     `<span class="${strategyColor}">${status.strategy}</span>` +
+    demoBadge +
     `</span>`;
   document.getElementById("broker-badge").addEventListener("click", openBrokerModal);
+  // Un changement d'état de connexion réactualise le bouton trade actif.
+  if (wasConnected !== state.brokerConnected && state.activeSymbol) refreshTradingButton();
 }
 
 // --- Identifiants broker (fenêtre modale) ----------------------------------
@@ -402,6 +458,9 @@ async function openBrokerModal() {
     // Réseau HS : on ouvre quand même avec des champs vides.
   }
   document.getElementById("broker-modal-name").textContent = data.broker;
+  const stateEl = document.getElementById("broker-connection-state");
+  stateEl.textContent = state.brokerConnected ? "connecté" : "déconnecté";
+  stateEl.className = `font-semibold ${state.brokerConnected ? "text-emerald-400" : "text-red-400"}`;
   usernameInput.value = data.username || "";
   passwordInput.value = "";
   // Déjà enregistré : le mot de passe s'affiche en étoiles (placeholder),
@@ -441,6 +500,7 @@ async function submitBrokerCredentials(event) {
     return;
   }
   closeBrokerModal();
+  showToast("Identifiants broker enregistrés.", "success");
   await loadStatus(); // rafraîchit le badge (clé 🔑)
 }
 
@@ -453,6 +513,28 @@ async function clearBrokerCredentials() {
     return;
   }
   closeBrokerModal();
+  showToast("Identifiants broker effacés.", "info");
+  await loadStatus();
+}
+
+async function connectBroker() {
+  showToast("Connexion au broker…", "info");
+  let response;
+  try {
+    response = await fetch("/api/broker/connect", { method: "POST" });
+  } catch (err) {
+    showToast("Réseau indisponible.", "error");
+    return;
+  }
+  if (response.ok) {
+    showToast("Broker connecté.", "success");
+    closeBrokerModal();
+  } else {
+    // Retour HONNÊTE du serveur (501 tant qu'IB n'est pas câblé) — pas de
+    // fausse connexion.
+    const err = await response.json().catch(() => ({}));
+    showToast(err.detail || "Connexion au broker impossible.", "error");
+  }
   await loadStatus();
 }
 
@@ -485,6 +567,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Fenêtre d'identifiants broker (boutons statiques câblés une fois).
   document.getElementById("broker-form").addEventListener("submit", submitBrokerCredentials);
   document.getElementById("broker-clear").addEventListener("click", clearBrokerCredentials);
+  document.getElementById("broker-connect").addEventListener("click", connectBroker);
   document.getElementById("broker-cancel").addEventListener("click", closeBrokerModal);
   document.getElementById("broker-modal-close").addEventListener("click", closeBrokerModal);
   document.getElementById("broker-modal").addEventListener("click", (event) => {

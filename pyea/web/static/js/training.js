@@ -128,14 +128,18 @@ async function runTraining() {
       body: JSON.stringify(body),
     });
     if (!response.ok) {
-      message.textContent = `Erreur : ${apiErrorText(await response.json())}`;
+      const detail = apiErrorText(await response.json());
+      message.textContent = `Erreur : ${detail}`;
+      showToast(`Entraînement refusé : ${detail}`, "error");
       button.disabled = false;
       document.getElementById("tr-progress-wrap").classList.add("hidden");
       return;
     }
     currentJobId = (await response.json()).job_id;
+    showToast(`Entraînement ${body.symbol} lancé…`, "info");
   } catch (error) {
     message.textContent = `Erreur réseau : ${error.message}`;
+    showToast(`Erreur réseau : ${error.message}`, "error");
     button.disabled = false;
     document.getElementById("tr-progress-wrap").classList.add("hidden");
     return;
@@ -190,10 +194,13 @@ async function pollJob() {
   if (job.status === "completed") {
     message.textContent = "";
     renderTraining(job.result);
+    showToast(`Entraînement terminé : ${job.result.oos_stats.trades} trade(s) OOS.`, "success");
   } else if (job.status === "cancelled") {
     message.textContent = "Entraînement annulé.";
+    showToast("Entraînement annulé.", "info");
   } else {
     message.textContent = `Échec : ${job.error}`;
+    showToast(`Entraînement échoué : ${job.error}`, "error");
   }
   loadRuns();
 }

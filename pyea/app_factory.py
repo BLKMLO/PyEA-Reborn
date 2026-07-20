@@ -15,6 +15,8 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from pyea.api import api_backtest, api_pages, api_rest, api_training, api_websocket
+from pyea.brokers import get_gateway
+from pyea.brokers.broker_runtime import broker_runtime
 from pyea.config.config_settings import get_settings
 from pyea.core.core_logging import get_logger, setup_logging
 from pyea.storage.storage_database import init_db
@@ -35,15 +37,20 @@ async def lifespan(app: FastAPI):
             orphans,
         )
     api_websocket.wire_event_bus()
+    # Gateway broker instanciée (pas connectée : la connexion réelle est une
+    # action explicite de l'utilisateur). L'API lit son état via broker_runtime
+    # — plus jamais de broker_connected codé en dur.
+    broker_runtime.set_gateway(get_gateway(settings.broker_name)(settings))
     logger.info(
         "PyEA démarré — broker=%s mode=%s stratégie=%s",
         settings.broker_name,
         settings.trading_mode,
         settings.strategy_name,
     )
-    # Plus tard : instancier la gateway broker, la stratégie active et le
-    # MarketDataFeed ici, et les arrêter proprement après le yield.
+    # Plus tard : monter la stratégie active et le MarketDataFeed ici, et les
+    # arrêter proprement après le yield.
     yield
+    await broker_runtime.disconnect()
     logger.info("PyEA arrêté.")
 
 
