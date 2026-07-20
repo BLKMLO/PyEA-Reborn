@@ -129,12 +129,11 @@ jamais commité — modèle dans `.env.example`).
   SQLite (`storage_trading_state.py`, défaut = Stopped), relu à chaque
   changement d'onglet (`GET /api/trading/{symbol}`), bascule via
   `PUT /api/trading/{symbol}`, confirmation JS si mode live,
-  **badge broker du header cliquable → fenêtre modale d'identifiants**
-  (nom d'utilisateur + mot de passe gardés EN MÉMOIRE via
-  `brokers/broker_credentials.py`, jamais sur disque ni en log, effacés à
-  l'arrêt ; `GET/PUT/DELETE /api/broker/credentials`, mot de passe jamais
-  renvoyé par l'API — masqué en étoiles si déjà enregistré ; clé 🔑 sur le
-  badge quand configuré ; `broker_credentials_set` ajouté à `/api/status`),
+  **badge broker du header cliquable → fenêtre de connexion broker**
+  (infos host/port/client_id/mode en LECTURE SEULE depuis la config +
+  bouton Se connecter/déconnecter + état réel ; `GET /api/broker`,
+  `POST /api/broker/connect|disconnect`). **Pas de login/mot de passe :
+  l'API IB s'authentifie via TWS/IB Gateway, pas par identifiants.**
   panneau bas Positions (fermées grisées, récentes en premier) / Logs,
   P&L total en bas à droite, **nav à 3 pages dans le header : Live |
   Backtest | Entraînement**. Rafraîchissement du seul graphique actif
@@ -272,6 +271,22 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
    raccourci stratégie→broker, même « pour tester »).
 
 ## Journal de décisions
+
+- **2026-07-20** — **Fenêtre broker : login/mdp retirés** (l'utilisateur a
+  tranché après clarification). L'API Interactive Brokers **ne
+  s'authentifie pas par identifiants** : c'est TWS / IB Gateway (déjà
+  logué) qui gère le compte ; PyEA se connecte au socket API via
+  host/port/client_id. Conséquences : la modale « Identifiants » devient
+  une fenêtre de **Connexion** (host/port/client_id/mode en lecture seule +
+  Se connecter/déconnecter + état) ; endpoints `GET/PUT/DELETE
+  /api/broker/credentials` **supprimés**, remplacés par `GET /api/broker`
+  (infos) ; `broker_credentials_set` retiré de `/api/status` ; la gateway
+  IB ne lit plus `broker_credentials.password`. Le module
+  `broker_credentials.py` est **conservé en code** (réservé à un futur
+  broker qui, lui, aurait besoin d'identifiants) mais n'est plus câblé.
+  6 tests credentials retirés, 1 test `/api/broker` ajouté, 105 verts.
+  Validé au navigateur (fenêtre sans champ login/mdp, host:port affichés,
+  connexion → 501 honnête).
 
 - **2026-07-20** — **Passe « honnêteté de l'interface »** (demande
   utilisateur après usage réel : « je ne veux pas de mensonges dans mon

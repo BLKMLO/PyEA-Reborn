@@ -51,7 +51,7 @@ PyEA-Reborn/
 │   │
 │   ├── brokers/
 │   │   ├── broker_gateway.py              # Contrat générique BrokerGateway + registre.
-│   │   ├── broker_credentials.py          # Identifiants broker saisis au runtime, gardés EN MÉMOIRE (jamais sur disque).
+│   │   ├── broker_credentials.py          # Store login/mdp en mémoire — réservé à un futur broker (IB n'en a pas besoin).
 │   │   ├── broker_runtime.py              # Gateway active + état de connexion RÉEL (singleton, lu par l'API).
 │   │   └── broker_interactive_brokers.py  # 1re implémentation (ib_async). Suivant : broker_<nom>.py.
 │   │
@@ -64,7 +64,7 @@ PyEA-Reborn/
 │   │
 │   ├── api/
 │   │   ├── api_pages.py                   # Pages HTML : / (live), /backtest, /training (Jinja2 + HTMX).
-│   │   ├── api_rest.py                    # REST : status, broker/{credentials,connect,disconnect}, symbols, trading, positions, logs, charts.
+│   │   ├── api_rest.py                    # REST : status, broker (info + connect/disconnect), symbols, trading, positions, logs, charts.
 │   │   ├── api_backtest.py                # REST : /api/backtest/datasets et /api/backtest/run.
 │   │   ├── api_training.py                # REST : /api/training/run, current-job, jobs/{id}, runs, definition/{strategy}.
 │   │   └── api_websocket.py               # WebSocket /ws : relais du bus vers les navigateurs.

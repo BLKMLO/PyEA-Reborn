@@ -22,7 +22,6 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from pyea.brokers.broker_credentials import broker_credentials
 from pyea.brokers.broker_runtime import broker_runtime
 from pyea.config.config_settings import get_settings
 from pyea.core.core_logging import get_logger, web_log_buffer
@@ -56,7 +55,6 @@ async def get_status() -> dict[str, Any]:
         "trading_mode": settings.trading_mode,
         "broker": settings.broker_name,
         "broker_connected": broker_runtime.is_connected(),  # état RÉEL de la gateway
-        "broker_credentials_set": broker_credentials.is_configured(),
         "market_data_live": MARKET_DATA_LIVE,  # False → l'UI marque « DÉMO »
         "strategy": settings.strategy_name,
         "strategy_enabled": settings.strategy_enabled,
@@ -92,66 +90,25 @@ async def disconnect_broker() -> dict[str, Any]:
     return {"broker_connected": broker_runtime.is_connected()}
 
 
-# --- Identifiants broker (saisis au runtime, gardés en mémoire) ---
+# --- Connexion broker ---
+# L'API Interactive Brokers ne s'authentifie PAS par login/mot de passe :
+# c'est TWS / IB Gateway (déjà logué par l'utilisateur) qui gère le compte ;
+# PyEA s'y connecte via le socket API (host / port / client_id de config).
+# On n'affiche donc que ces paramètres, en lecture seule.
 
 
-class BrokerCredentialsIn(BaseModel):
-    """Corps du PUT : le mot de passe est optionnel pour permettre de ne
-    changer que l'identifiant sans re-saisir le mot de passe masqué."""
-
-    username: str
-    password: str | None = None
-
-
-def _broker_credentials_view() -> dict[str, Any]:
-    """Vue publique des identifiants : JAMAIS le mot de passe en clair.
-
-    On renvoie l'identifiant (utile pour reconnaître le compte) et un
-    booléen ``configured`` ; le front masque le mot de passe par des
-    étoiles lorsque ``configured`` est vrai.
-    """
+@router.get("/broker")
+async def get_broker_info() -> dict[str, Any]:
+    """Infos de connexion (lecture seule) affichées dans la fenêtre broker."""
+    settings = get_settings()
     return {
-        "broker": get_settings().broker_name,
-        "configured": broker_credentials.is_configured(),
-        "username": broker_credentials.username,
+        "broker": settings.broker_name,
+        "trading_mode": settings.trading_mode,
+        "host": settings.ib_host,
+        "port": settings.ib_port,  # paper ou live selon trading_mode
+        "client_id": settings.ib_client_id,
+        "connected": broker_runtime.is_connected(),
     }
-
-
-@router.get("/broker/credentials")
-async def get_broker_credentials() -> dict[str, Any]:
-    """Indique si des identifiants broker sont en mémoire (sans les révéler)."""
-    return _broker_credentials_view()
-
-
-@router.put("/broker/credentials")
-async def put_broker_credentials(payload: BrokerCredentialsIn) -> dict[str, Any]:
-    """Enregistre les identifiants broker EN MÉMOIRE (jusqu'à l'arrêt serveur).
-
-    Mot de passe vide + identifiants déjà présents = on garde le mot de
-    passe existant (l'utilisateur n'a pas re-saisi les étoiles). Mot de
-    passe vide sans identifiants préalables = erreur 422.
-    """
-    username = payload.username.strip()
-    if not username:
-        raise HTTPException(status_code=422, detail="Nom d'utilisateur requis.")
-    password = payload.password or ""
-    if not password:
-        if not broker_credentials.is_configured():
-            raise HTTPException(status_code=422, detail="Mot de passe requis.")
-        broker_credentials.update_username(username)
-    else:
-        broker_credentials.set(username, password)
-    # Journalisation SANS le mot de passe (jamais de secret dans les logs).
-    logger.info("Identifiants broker enregistrés (utilisateur : %s).", username)
-    return _broker_credentials_view()
-
-
-@router.delete("/broker/credentials")
-async def delete_broker_credentials() -> dict[str, Any]:
-    """Efface les identifiants broker de la mémoire."""
-    broker_credentials.clear()
-    logger.info("Identifiants broker effacés.")
-    return _broker_credentials_view()
 
 
 @router.get("/symbols")

@@ -407,23 +407,19 @@ async function loadStatus() {
   const modePill = live ? "bg-amber-600 text-white" : "bg-sky-700 text-sky-100";
   const brokerDot = status.broker_connected ? "bg-emerald-400" : "bg-red-500";
   const strategyColor = status.strategy_enabled ? "text-emerald-400" : "text-slate-500";
-  // Le badge broker est CLIQUABLE : il ouvre la fenêtre de saisie des
-  // identifiants. Une clé (🔑) signale que des identifiants sont en mémoire.
-  const credsMark = status.broker_credentials_set
-    ? `<span title="Identifiants enregistrés">🔑</span>`
-    : "";
   // Badge DÉMO franc quand les données de marché ne sont pas réelles : le
   // graphique et les prix de la watchlist sont simulés — pas de tromperie.
   const demoBadge = status.market_data_live
     ? ""
     : `<span class="rounded bg-purple-700 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-purple-100"` +
       ` title="Données de marché simulées (aucun flux broker connecté)">démo</span>`;
+  // Le badge broker est CLIQUABLE : il ouvre la fenêtre de connexion broker.
   document.getElementById("header-status").innerHTML =
     `<span class="inline-flex items-center gap-2">` +
     `<span class="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${modePill}">${status.trading_mode}</span>` +
-    `<button id="broker-badge" type="button" title="Configurer / connecter le broker"` +
+    `<button id="broker-badge" type="button" title="Connexion au broker"` +
     ` class="inline-flex items-center gap-1 rounded px-1 hover:bg-slate-700">` +
-    `<span class="h-1.5 w-1.5 rounded-full ${brokerDot}"></span>${status.broker}${credsMark}` +
+    `<span class="h-1.5 w-1.5 rounded-full ${brokerDot}"></span>${status.broker}` +
     `<span class="text-[10px] ${status.broker_connected ? "text-emerald-400" : "text-red-400"}">` +
     `${status.broker_connected ? "connecté" : "déconnecté"}</span></button>` +
     `<span class="text-slate-500">·</span>` +
@@ -435,7 +431,10 @@ async function loadStatus() {
   if (wasConnected !== state.brokerConnected && state.activeSymbol) refreshTradingButton();
 }
 
-// --- Identifiants broker (fenêtre modale) ----------------------------------
+// --- Connexion broker (fenêtre modale) -------------------------------------
+// L'API IB ne prend pas de login/mot de passe (TWS/IB Gateway gère le
+// compte) : la fenêtre montre les paramètres de socket en lecture seule et
+// un bouton de connexion, avec l'état réel.
 
 function setBrokerError(message) {
   const el = document.getElementById("broker-error");
@@ -443,34 +442,33 @@ function setBrokerError(message) {
   el.classList.toggle("hidden", !message);
 }
 
+function renderBrokerConnectionState(connected) {
+  const stateEl = document.getElementById("broker-connection-state");
+  stateEl.textContent = connected ? "connecté" : "déconnecté";
+  stateEl.className = `font-semibold ${connected ? "text-emerald-400" : "text-red-400"}`;
+  document.getElementById("broker-connect").classList.toggle("hidden", connected);
+  document.getElementById("broker-disconnect").classList.toggle("hidden", !connected);
+}
+
 async function openBrokerModal() {
   setBrokerError("");
   const modal = document.getElementById("broker-modal");
-  const usernameInput = document.getElementById("broker-username");
-  const passwordInput = document.getElementById("broker-password");
-  const hint = document.getElementById("broker-password-hint");
-  const clearBtn = document.getElementById("broker-clear");
-  let data = { configured: false, username: "", broker: "broker" };
+  let info = { broker: "broker", trading_mode: "—", host: "—", port: "—",
+               client_id: "—", connected: state.brokerConnected };
   try {
-    const response = await fetch("/api/broker/credentials");
-    if (response.ok) data = await response.json();
+    const response = await fetch("/api/broker");
+    if (response.ok) info = await response.json();
   } catch (err) {
-    // Réseau HS : on ouvre quand même avec des champs vides.
+    // Réseau HS : on ouvre quand même avec des tirets.
   }
-  document.getElementById("broker-modal-name").textContent = data.broker;
-  const stateEl = document.getElementById("broker-connection-state");
-  stateEl.textContent = state.brokerConnected ? "connecté" : "déconnecté";
-  stateEl.className = `font-semibold ${state.brokerConnected ? "text-emerald-400" : "text-red-400"}`;
-  usernameInput.value = data.username || "";
-  passwordInput.value = "";
-  // Déjà enregistré : le mot de passe s'affiche en étoiles (placeholder),
-  // laisser vide = on garde le mot de passe en mémoire.
-  passwordInput.placeholder = data.configured ? "••••••••" : "";
-  hint.classList.toggle("hidden", !data.configured);
-  clearBtn.classList.toggle("hidden", !data.configured);
+  document.getElementById("broker-modal-name").textContent = info.broker;
+  document.getElementById("broker-info-mode").textContent = info.trading_mode;
+  document.getElementById("broker-info-host").textContent = info.host;
+  document.getElementById("broker-info-port").textContent = info.port;
+  document.getElementById("broker-info-client").textContent = info.client_id;
+  renderBrokerConnectionState(info.connected);
   modal.classList.remove("hidden");
   modal.classList.add("flex");
-  usernameInput.focus();
 }
 
 function closeBrokerModal() {
@@ -479,45 +477,8 @@ function closeBrokerModal() {
   modal.classList.remove("flex");
 }
 
-async function submitBrokerCredentials(event) {
-  event.preventDefault();
-  setBrokerError("");
-  const username = document.getElementById("broker-username").value.trim();
-  const password = document.getElementById("broker-password").value;
-  try {
-    const response = await fetch("/api/broker/credentials", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
-    });
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      setBrokerError(err.detail || "Enregistrement impossible.");
-      return;
-    }
-  } catch (err) {
-    setBrokerError("Réseau indisponible.");
-    return;
-  }
-  closeBrokerModal();
-  showToast("Identifiants broker enregistrés.", "success");
-  await loadStatus(); // rafraîchit le badge (clé 🔑)
-}
-
-async function clearBrokerCredentials() {
-  setBrokerError("");
-  try {
-    await fetch("/api/broker/credentials", { method: "DELETE" });
-  } catch (err) {
-    setBrokerError("Réseau indisponible.");
-    return;
-  }
-  closeBrokerModal();
-  showToast("Identifiants broker effacés.", "info");
-  await loadStatus();
-}
-
 async function connectBroker() {
+  setBrokerError("");
   showToast("Connexion au broker…", "info");
   let response;
   try {
@@ -528,13 +489,26 @@ async function connectBroker() {
   }
   if (response.ok) {
     showToast("Broker connecté.", "success");
-    closeBrokerModal();
+    renderBrokerConnectionState(true);
   } else {
     // Retour HONNÊTE du serveur (501 tant qu'IB n'est pas câblé) — pas de
     // fausse connexion.
     const err = await response.json().catch(() => ({}));
+    setBrokerError(err.detail || "Connexion au broker impossible.");
     showToast(err.detail || "Connexion au broker impossible.", "error");
   }
+  await loadStatus();
+}
+
+async function disconnectBroker() {
+  try {
+    await fetch("/api/broker/disconnect", { method: "POST" });
+  } catch (err) {
+    showToast("Réseau indisponible.", "error");
+    return;
+  }
+  showToast("Broker déconnecté.", "info");
+  renderBrokerConnectionState(false);
   await loadStatus();
 }
 
@@ -564,10 +538,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   initBottomTabs();
   initWebSocket();
   document.getElementById("trading-toggle").addEventListener("click", toggleTrading);
-  // Fenêtre d'identifiants broker (boutons statiques câblés une fois).
-  document.getElementById("broker-form").addEventListener("submit", submitBrokerCredentials);
-  document.getElementById("broker-clear").addEventListener("click", clearBrokerCredentials);
+  // Fenêtre de connexion broker (boutons statiques câblés une fois).
   document.getElementById("broker-connect").addEventListener("click", connectBroker);
+  document.getElementById("broker-disconnect").addEventListener("click", disconnectBroker);
   document.getElementById("broker-cancel").addEventListener("click", closeBrokerModal);
   document.getElementById("broker-modal-close").addEventListener("click", closeBrokerModal);
   document.getElementById("broker-modal").addEventListener("click", (event) => {

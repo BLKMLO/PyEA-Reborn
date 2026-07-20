@@ -81,54 +81,40 @@
     </div>
   </section>
 
-  <!-- Fenêtre d'identifiants broker : ouverte au clic sur le badge broker du
-       header. Les identifiants sont gardés EN MÉMOIRE côté serveur (effacés à
-       l'arrêt) ; si déjà enregistrés, le mot de passe s'affiche en étoiles. -->
+  <!-- Fenêtre de connexion broker : ouverte au clic sur le badge broker du
+       header. L'API IB ne prend PAS de login/mot de passe — l'authentification
+       se fait dans TWS / IB Gateway ; PyEA s'y connecte via le socket API
+       (host/port/client_id, en lecture seule ci-dessous). -->
   <div id="broker-modal"
        class="fixed inset-0 z-50 hidden items-center justify-center bg-slate-950/70 p-4">
     <div class="w-full max-w-sm rounded-lg border border-slate-700 bg-slate-800 p-5 shadow-xl">
       <div class="mb-3 flex items-center justify-between">
-        <h3 class="text-sm font-semibold">Identifiants <span id="broker-modal-name">broker</span></h3>
+        <h3 class="text-sm font-semibold">Connexion <span id="broker-modal-name">broker</span></h3>
         <button id="broker-modal-close" class="text-slate-400 hover:text-slate-200" aria-label="Fermer">✕</button>
       </div>
-      <form id="broker-form" class="space-y-3">
-        <div>
-          <label class="mb-1 block text-xs text-slate-400" for="broker-username">Nom d'utilisateur</label>
-          <input id="broker-username" type="text" autocomplete="username"
-                 class="w-full rounded border border-slate-600 bg-slate-900 px-2 py-1.5 text-sm outline-none focus:border-emerald-500">
-        </div>
-        <div>
-          <label class="mb-1 block text-xs text-slate-400" for="broker-password">Mot de passe</label>
-          <input id="broker-password" type="password" autocomplete="current-password"
-                 class="w-full rounded border border-slate-600 bg-slate-900 px-2 py-1.5 text-sm outline-none focus:border-emerald-500">
-          <p id="broker-password-hint" class="mt-1 hidden text-[11px] text-slate-500">
-            Laisser vide pour conserver le mot de passe enregistré.
-          </p>
-        </div>
-        <p class="text-[11px] text-slate-500">
-          Conservés en mémoire uniquement, jusqu'à l'arrêt du serveur — jamais écrits sur disque.
-        </p>
-        <p id="broker-error" class="hidden text-[11px] text-red-400"></p>
-        <div class="flex items-center justify-between pt-1">
-          <button type="button" id="broker-clear"
-                  class="hidden rounded px-2 py-1 text-xs text-red-400 hover:bg-slate-700">Effacer</button>
-          <div class="ml-auto flex gap-2">
-            <button type="button" id="broker-cancel"
-                    class="rounded px-3 py-1 text-xs text-slate-300 hover:bg-slate-700">Annuler</button>
-            <button type="submit"
-                    class="rounded bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-500">Enregistrer</button>
-          </div>
-        </div>
-        <div class="border-t border-slate-700 pt-3">
+      <dl class="space-y-1.5 text-xs">
+        <div class="flex justify-between"><dt class="text-slate-400">Mode</dt><dd id="broker-info-mode" class="font-mono">—</dd></div>
+        <div class="flex justify-between"><dt class="text-slate-400">Hôte</dt><dd id="broker-info-host" class="font-mono">—</dd></div>
+        <div class="flex justify-between"><dt class="text-slate-400">Port</dt><dd id="broker-info-port" class="font-mono">—</dd></div>
+        <div class="flex justify-between"><dt class="text-slate-400">Client ID</dt><dd id="broker-info-client" class="font-mono">—</dd></div>
+        <div class="flex justify-between"><dt class="text-slate-400">État</dt><dd id="broker-connection-state" class="font-semibold">—</dd></div>
+      </dl>
+      <p class="mt-3 text-[11px] text-slate-500">
+        L'authentification se fait dans <b>TWS / IB Gateway</b> (session déjà
+        ouverte). PyEA s'y connecte via le socket API — hôte/port/client ID
+        se règlent dans <code>.env</code> et <code>config.yaml</code>.
+      </p>
+      <p id="broker-error" class="mt-2 hidden text-[11px] text-red-400"></p>
+      <div class="mt-4 flex items-center justify-between">
+        <button type="button" id="broker-cancel"
+                class="rounded px-3 py-1 text-xs text-slate-300 hover:bg-slate-700">Fermer</button>
+        <div class="flex gap-2">
+          <button type="button" id="broker-disconnect"
+                  class="hidden rounded bg-slate-600 px-3 py-1 text-xs font-semibold text-white hover:bg-slate-500">Se déconnecter</button>
           <button type="button" id="broker-connect"
-                  class="w-full rounded bg-sky-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-600">
-            Se connecter au broker
-          </button>
-          <p class="mt-1 text-[11px] text-slate-500">
-            État actuel : <span id="broker-connection-state" class="font-semibold">—</span>
-          </p>
+                  class="rounded bg-sky-700 px-3 py-1 text-xs font-semibold text-white hover:bg-sky-600">Se connecter</button>
         </div>
-      </form>
+      </div>
     </div>
   </div>
 {% endblock %}
