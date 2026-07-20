@@ -14,12 +14,12 @@ from typing import Any
 
 import pandas as pd
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from pyea.backtest import BacktestEngine
 from pyea.config.config_settings import get_settings
 from pyea.core.core_logging import get_logger
-from pyea.data.data_history_downloader import load_history, resample_history
+from pyea.data.data_history_downloader import file_year, load_history, resample_history
 from pyea.risk.risk_manager import RiskManager
 from pyea.strategies.strategy_registry import get_strategy, list_strategies
 
@@ -37,9 +37,14 @@ def get_datasets() -> dict[str, Any]:
     datasets = []
     if data_dir.is_dir():
         for symbol_dir in sorted(data_dir.iterdir()):
+            if not symbol_dir.is_dir():
+                continue  # Fichier égaré à la racine du dossier d'historique.
+            # file_year ignore les fichiers au suffixe non numérique
+            # (copies de sauvegarde manuelles, renommages…).
             years = sorted(
-                int(file.stem.rsplit("_", 1)[1])
+                year
                 for file in symbol_dir.glob(f"{symbol_dir.name}_m1_*.parquet")
+                if (year := file_year(file)) is not None
             )
             if years:
                 datasets.append(
@@ -59,6 +64,14 @@ class BacktestRunRequest(BaseModel):
     start: date | None = None
     end: date | None = None
 
+    @model_validator(mode="after")
+    def _periode_coherente(self) -> "BacktestRunRequest":
+        if self.start and self.end and self.start > self.end:
+            raise ValueError(
+                f"Période invalide : début ({self.start}) postérieur à la fin ({self.end})."
+            )
+        return self
+
 
 @router.post("/run")
 def run_backtest(request: BacktestRunRequest) -> dict[str, Any]:
@@ -75,12 +88,12 @@ def run_backtest(request: BacktestRunRequest) -> dict[str, Any]:
         start = pd.Timestamp(request.start, tz="UTC") if request.start else None
         end = pd.Timestamp(request.end, tz="UTC") if request.end else None
         frame = load_history(data_dir, request.symbol, start, end)
+        frame = resample_history(frame, request.timeframe)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-
-    try:
-        frame = resample_history(frame, request.timeframe)
     except ValueError as exc:
+        # Parquet corrompu, période inversée, timeframe inconnu : erreurs
+        # d'utilisateur → 400 avec message actionnable, jamais un 500.
         raise HTTPException(status_code=400, detail=str(exc))
     if frame.empty:
         raise HTTPException(

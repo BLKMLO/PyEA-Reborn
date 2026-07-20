@@ -15,7 +15,7 @@ from typing import Any
 
 import pandas as pd
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from pyea.config.config_settings import get_settings
 from pyea.core.core_logging import get_logger
@@ -36,6 +36,14 @@ class TrainingRunRequest(BaseModel):
     folds: int = Field(default=4, ge=1, le=20)
     start: date | None = None
     end: date | None = None
+
+    @model_validator(mode="after")
+    def _periode_coherente(self) -> "TrainingRunRequest":
+        if self.start and self.end and self.start > self.end:
+            raise ValueError(
+                f"Période invalide : début ({self.start}) postérieur à la fin ({self.end})."
+            )
+        return self
 
 
 @router.post("/run")

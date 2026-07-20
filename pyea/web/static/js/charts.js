@@ -352,7 +352,9 @@ async function refreshLogs() {
 async function loadStatus() {
   const response = await fetch("/api/status");
   const status = await response.json();
-  state.refreshSeconds = status.chart_refresh_seconds || 5;
+  // Le serveur garantit ≥ 1 (validation config), ceinture côté client :
+  // un intervalle 0 martèlerait l'API en boucle.
+  state.refreshSeconds = Math.max(1, status.chart_refresh_seconds || 5);
   state.tradingMode = status.trading_mode;
   // Statut en badges colorés (façon barre d'état d'un terminal de trading) :
   // mode (LIVE en ambre = prudence), connexion broker (pastille), stratégie.

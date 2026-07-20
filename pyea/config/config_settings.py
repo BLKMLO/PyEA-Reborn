@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -38,18 +39,22 @@ class Settings(BaseSettings):
     ib_account_id: str = ""
 
     # --- Fonctionnel (config.yaml, surchargeables par .env) ---
+    # Les bornes (ge/gt/le) transforment une valeur absurde saisie dans
+    # config.yaml en ERREUR CLAIRE AU DÉMARRAGE plutôt qu'en comportement
+    # dangereux au runtime (ex. : refresh 0 s = marteler le serveur,
+    # taille de position négative = ordres inversés en live).
     server_host: str = "127.0.0.1"
-    server_port: int = 8000
+    server_port: int = Field(default=8000, ge=1, le=65535)
     broker_name: str = "interactive_brokers"
     trading_mode: Literal["paper", "live"] = "paper"
     strategy_name: str = "couleuvre_v0_1"
     strategy_enabled: bool = False
-    ui_chart_refresh_seconds: int = 5
-    risk_max_position_size: int = 1
-    risk_max_daily_loss_pct: float = 2.0
-    risk_max_open_positions: int = 1
+    ui_chart_refresh_seconds: int = Field(default=5, ge=1)
+    risk_max_position_size: float = Field(default=1, gt=0)
+    risk_max_daily_loss_pct: float = Field(default=2.0, ge=0)
+    risk_max_open_positions: int = Field(default=1, ge=1)
     history_data_dir: str = "./data/history"
-    history_start_year: int = 2010
+    history_start_year: int = Field(default=2010, ge=1990, le=2100)
     history_instruments: list[str] = ["EURUSD"]
     database_url: str = "sqlite:///./data/pyea.db"
     models_dir: str = "./data/models"
@@ -66,8 +71,18 @@ class Settings(BaseSettings):
 def _load_yaml(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
-    with path.open(encoding="utf-8") as fh:
-        return yaml.safe_load(fh) or {}
+    try:
+        with path.open(encoding="utf-8") as fh:
+            loaded = yaml.safe_load(fh) or {}
+    except yaml.YAMLError as exc:
+        raise ValueError(
+            f"config.yaml illisible (syntaxe YAML invalide) : {exc}"
+        ) from exc
+    if not isinstance(loaded, dict):
+        raise ValueError(
+            "config.yaml illisible : le contenu doit être un mapping clé/valeur."
+        )
+    return loaded
 
 
 def _yaml_overrides(raw: dict[str, Any]) -> dict[str, Any]:

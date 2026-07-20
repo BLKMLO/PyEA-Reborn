@@ -111,7 +111,7 @@ jamais commité — modèle dans `.env.example`).
 ## État du projet
 
 - Échafaudage complet et fonctionnel : serveur web, REST + WebSocket,
-  registres stratégie/broker, SQLAlchemy (SQLite), 75 tests verts.
+  registres stratégie/broker, SQLAlchemy (SQLite), 106 tests verts.
 - Dashboard live façon TradingView : chandeliers M1 au centre
   (**TradingView Lightweight Charts** : pan/zoom natifs, historique
   paginé via `?before=`, refresh incrémental `series.update` qui
@@ -272,6 +272,34 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
    raccourci stratégie→broker, même « pour tester »).
 
 ## Journal de décisions
+
+- **2026-07-20** — **Passe « utilisateur maladroit »** (demande
+  explicite : sécuriser contre les erreurs d'usage, hors attaque
+  extérieure). Méthode : chaque bêtise a d'abord été REPRODUITE (3 × 500,
+  2 valeurs dangereuses acceptées, 2 crashs CLI), puis corrigée, puis
+  couverte par un test (92 → 106 verts). Corrections :
+  (1) **Config bornée par pydantic** (`Field(ge/gt/le)`) :
+  `chart_refresh_seconds: 0` (le front aurait martelé l'API en boucle) et
+  `max_position_size: -3` (ordres INVERSÉS en live !) étaient acceptés
+  silencieusement — désormais refusés au démarrage ; `max_position_size`
+  passé `int → float` au passage (0.5 lot légitime). (2) **Démarrages CLI
+  lisibles** : YAML malformé, valeur invalide (champ + valeur reçue
+  affichés via `load_settings_or_die`, partagé par les deux scripts) et
+  **port déjà occupé** (pré-check socket : « PyEA tourne probablement
+  déjà ») = message net, plus de traceback. (3) **`load_history`
+  blindé** : fichiers parasites ignorés (`file_year` : suffixe non
+  numérique — une copie `_backup.parquet` cassait TOUTE la page backtest
+  via `int()`), doublons d'index dédupliqués (copie d'année sous deux
+  noms = bougies doublées silencieuses), Parquet corrompu → erreur
+  nommant le fichier et le remède, période inversée refusée. (4) **API** :
+  erreurs de données → 400/422 avec détail (plus jamais 500) ;
+  validateur pydantic « début ≤ fin » sur les requêtes backtest ET
+  entraînement. (5) **Téléchargeur** : validation de TOUS les symboles et
+  des années AVANT le premier octet téléchargé (une faute de frappe ne
+  tue plus un run de plusieurs heures ; message listant les symboles
+  supportés). Conséquence assumée : une config invalide EMPÊCHE le
+  démarrage (fail-fast choisi contre le clamp silencieux — un logiciel
+  de trading ne doit jamais deviner ce que l'utilisateur voulait).
 
 - **2026-07-20** — **Saisie des identifiants broker depuis le dashboard**
   (demande utilisateur : clic sur le badge broker → fenêtre de dialogue,

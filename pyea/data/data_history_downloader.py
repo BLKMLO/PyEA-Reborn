@@ -243,6 +243,22 @@ async def download_history(
     Reprise incrémentale : une année déjà présente sur disque est sautée
     (sauf ``force``) ; l'année en cours est toujours re-téléchargée.
     """
+    # Tout valider AVANT le premier octet téléchargé : une faute de frappe
+    # dans un symbole ou des années inversées doivent échouer immédiatement
+    # avec un message clair, pas au milieu d'un run de plusieurs heures.
+    unknown = [symbol for symbol in symbols if symbol not in INSTRUMENT_SPECS]
+    if unknown:
+        supported = ", ".join(sorted(INSTRUMENT_SPECS))
+        raise KeyError(
+            f"Symbole(s) inconnu(s) : {', '.join(unknown)}. Supportés : {supported}"
+        )
+    if start_year > end_year:
+        raise ValueError(
+            f"Années incohérentes : start_year={start_year} > end_year={end_year}."
+        )
+    if start_year > date.today().year:
+        raise ValueError(f"start_year={start_year} est dans le futur.")
+
     written: dict[str, list[int]] = {symbol: [] for symbol in symbols}
     failed: list[tuple[str, int, str]] = []
     current_year = date.today().year
@@ -250,7 +266,6 @@ async def download_history(
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         for symbol in symbols:
-            get_spec(symbol)  # Échec immédiat si symbole inconnu.
             for year in range(start_year, end_year + 1):
                 target = year_file_path(data_dir, symbol, year)
                 if target.exists() and not force and year != current_year:
@@ -330,14 +345,36 @@ def resample_history(frame: pd.DataFrame, timeframe: str) -> pd.DataFrame:
     return resampled.dropna(subset=[next(iter(aggregations))])
 
 
+def file_year(file: Path) -> int | None:
+    """Année d'un fichier du layout ``<SYM>_m1_<année>.parquet`` — ``None``
+    si le suffixe n'est pas une année (copie de sauvegarde faite à la main,
+    fichier renommé…) : ces fichiers sont IGNORÉS, jamais chargés."""
+    suffix = file.stem.rsplit("_", 1)[-1]
+    return int(suffix) if suffix.isdigit() else None
+
+
 def load_history(
     data_dir: Path,
     symbol: str,
     start: datetime | None = None,
     end: datetime | None = None,
 ) -> pd.DataFrame:
-    """Recharge l'historique M1 d'un symbole (backtest / entraînement)."""
-    files = sorted((data_dir / symbol).glob(f"{symbol}_m1_*.parquet"))
+    """Recharge l'historique M1 d'un symbole (backtest / entraînement).
+
+    Robuste aux maladresses d'utilisateur : fichiers parasites ignorés
+    (suffixe non numérique), doublons d'index dédupliqués (copie d'un
+    fichier d'année sous deux noms), Parquet corrompu → erreur nommant le
+    fichier et le remède, période inversée refusée d'emblée.
+    """
+    if start is not None and end is not None and start > end:
+        raise ValueError(
+            f"Période invalide : début ({start.date()}) postérieur à la fin ({end.date()})."
+        )
+    files = sorted(
+        file
+        for file in (data_dir / symbol).glob(f"{symbol}_m1_*.parquet")
+        if file_year(file) is not None
+    )
     if not files:
         raise FileNotFoundError(
             f"Aucun historique pour {symbol} dans {data_dir} — "
@@ -346,18 +383,26 @@ def load_history(
     # Ne lit que les fichiers d'années chevauchant [start, end] : charger
     # 15 ans de M1 pour un backtest de 6 mois gaspille temps et mémoire.
     if start is not None or end is not None:
-        def year_of(file: Path) -> int:
-            return int(file.stem.rsplit("_", 1)[1])
-
         files = [
             file
             for file in files
-            if (start is None or year_of(file) >= start.year)
-            and (end is None or year_of(file) <= end.year)
+            if (start is None or file_year(file) >= start.year)
+            and (end is None or file_year(file) <= end.year)
         ]
         if not files:
             raise FileNotFoundError(
                 f"Aucun historique pour {symbol} sur la période demandée."
             )
-    frame = pd.concat(pd.read_parquet(file) for file in files).sort_index()
+    frames = []
+    for file in files:
+        try:
+            frames.append(pd.read_parquet(file))
+        except Exception as exc:  # pyarrow lève ArrowInvalid & co.
+            raise ValueError(
+                f"Fichier d'historique illisible (corrompu ?) : {file} — "
+                f"le supprimer puis relancer `python download_history.py` "
+                f"pour re-télécharger l'année. ({exc})"
+            ) from exc
+    frame = pd.concat(frames).sort_index()
+    frame = frame[~frame.index.duplicated(keep="last")]
     return frame.loc[start:end]
