@@ -25,6 +25,11 @@ SQLAlchemy>=2.0
 # Broker Interactive Brokers (fork communautaire maintenu d'ib_insync)
 ib_async>=1.0
 
+# Broker MetaTrader 5 — paquet officiel, Windows UNIQUEMENT (IPC vers le
+# terminal MT5). Non installable sous Linux/macOS (dev/CI), d'où l'import
+# paresseux dans broker_metatrader.py : décommenter sur le poste Windows.
+# MetaTrader5>=5.0.45 ; sys_platform == "win32"
+
 # Stratégie (Couleuvre_v0.1 — logique développée plus tard)
 lightgbm>=4.3
 

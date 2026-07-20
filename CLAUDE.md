@@ -130,10 +130,15 @@ jamais commité — modèle dans `.env.example`).
   changement d'onglet (`GET /api/trading/{symbol}`), bascule via
   `PUT /api/trading/{symbol}`, confirmation JS si mode live,
   **badge broker du header cliquable → fenêtre de connexion broker**
-  (infos host/port/client_id/mode en LECTURE SEULE depuis la config +
-  bouton Se connecter/déconnecter + état réel ; `GET /api/broker`,
-  `POST /api/broker/connect|disconnect`). **Pas de login/mot de passe :
-  l'API IB s'authentifie via TWS/IB Gateway, pas par identifiants.**
+  (**liste déroulante pour choisir le courtier** — Interactive Brokers ou
+  MetaTrader 5 —, paramètres du broker choisi en LECTURE SEULE + note
+  d'authentification propre à chaque broker + bouton Se connecter/déconnecter
+  + état réel ; `GET /api/brokers`, `POST /api/broker/connect|disconnect`).
+  **Aucun login/mot de passe dans PyEA** : IB s'authentifie via TWS/IB
+  Gateway, MetaTrader 5 via un terminal MT5 déjà ouvert (compte démo/réel
+  choisi dans le terminal). Broker actif = `broker.name` de config au
+  démarrage, changeable à chaud depuis la fenêtre (déconnexion requise pour
+  basculer ; le choix runtime ne réécrit pas la config).
   panneau bas Positions (fermées grisées, récentes en premier) / Logs,
   P&L total en bas à droite, **nav à 3 pages dans le header : Live |
   Backtest | Entraînement**. Rafraîchissement du seul graphique actif
@@ -249,8 +254,18 @@ jamais commité — modèle dans `.env.example`).
   identique), `load_history` ne lit que les années de la période, le
   téléchargeur survit à une année en échec (résumé en fin de run), erreurs
   422 lisibles côté UI, `wss://` derrière HTTPS. 80 tests verts.
-- **Squelettes vides** (NotImplementedError) à développer plus tard :
-  `InteractiveBrokersGateway` (appels ib_async réels), `MarketDataFeed`.
+- **Deux brokers enregistrés** : `InteractiveBrokersGateway` (ib_async, via
+  TWS/IB Gateway) et `MetaTraderGateway` (paquet `MetaTrader5`, attache à un
+  terminal MT5). **MetaTrader : connexion + lecture de compte RÉELLES**
+  (`connect`/`disconnect`/`is_connected`/`get_positions`/`get_account_summary`
+  via `MetaTrader5.initialize()`/`account_info()`/`positions_get()`), import
+  paresseux (paquet Windows non installé en sandbox → 503 honnête « installez
+  MetaTrader5 », jamais une fausse connexion) — **1er run réel à valider chez
+  l'utilisateur** (comme Dukascopy). IB `connect()` reste à écrire (ib_async).
+- **Squelettes restants** (NotImplementedError) : le **routage d'ordres**
+  (`place_order`/`cancel_order`) et le **flux de prix** (`subscribe_market_data`)
+  des DEUX brokers — aucun appelant tant que le flux live n'est pas monté dans
+  `app_factory` — et `MarketDataFeed`. On ne simule surtout jamais un ordre.
 
 ## Points de vigilance (audit modularité 2026-07-18)
 
@@ -271,6 +286,47 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
    raccourci stratégie→broker, même « pour tester »).
 
 ## Journal de décisions
+
+- **2026-07-20** — **MetaTrader 5 ajouté comme second broker** (demande
+  utilisateur : « ajoute metatrader comme logiciel reliable à PyEA » +
+  « liste déroulante pour choisir le courtier »). Décisions et conséquences :
+  (1) **Nouvelle gateway** `brokers/broker_metatrader.py` (`MetaTraderGateway`,
+  nom `metatrader5`, paquet officiel `MetaTrader5`) — **import paresseux**
+  (dans les méthodes) : le paquet est Windows-only et absent de la sandbox,
+  la gateway doit quand même s'enregistrer et l'app démarrer partout (même
+  logique que le téléchargeur Dukascopy). (2) **Même modèle d'authentification
+  qu'IB, tranché pour rester cohérent avec « pas de login/mdp dans PyEA »** :
+  PyEA **s'attache** à un terminal MT5 déjà lancé et connecté (démo/réel choisi
+  DANS le terminal) via `MetaTrader5.initialize()` — aucun identifiant saisi
+  dans PyEA. Conséquence assumée : `broker_credentials.py` reste inutilisé (ni
+  IB ni MT5 n'en ont besoin) ; `trading_mode` de config **ne pilote pas** le
+  démo/réel de MT5 (signalé dans la fenêtre). (3) **Connexion + lecture de
+  compte RÉELLES** pour MT5 (`connect`/`disconnect`/`is_connected`/
+  `get_positions`/`get_account_summary`) — read-only, sûr à écrire sans test ;
+  **routage d'ordres et flux de prix laissés en `NotImplementedError`** (comme
+  IB : aucun appelant tant que le flux live n'est pas monté — on ne simule
+  jamais un ordre). Paquet absent → **503 honnête** (« installez MetaTrader5 »),
+  jamais de fausse connexion. **1er run réel à valider chez l'utilisateur.**
+  (4) **Liste déroulante** de choix du broker : contrat `BrokerGateway` enrichi
+  (`label`, `connection_info()`, `connection_hint()` par broker → fenêtre
+  générique, plus de champs host/port codés en dur) + `list_gateways()` au
+  registre ; `broker_runtime` gère le **broker actif** et sa **bascule runtime**
+  (`select()`, refusée si connecté — un seul compte à la fois ; la config
+  `broker.name` reste le défaut au démarrage et n'est pas réécrite). (5) **API**
+  : `GET /api/broker` (singulier) → **`GET /api/brokers`** (liste + params/état
+  de chacun) ; `POST /api/broker/connect` accepte `{broker}` (sélection avant
+  connexion, 404 si inconnu, 409 si bascule à chaud sur connexion vivante) ;
+  `/api/status.broker` = broker ACTIF réel (pas la config brute). (6) **Front**
+  : `<select>` peuplé par `/api/brokers`, paramètres + note reconstruits par
+  broker, un seul JS (`charts.js`). Conséquences traitées : `config.yaml`
+  (brokers dispo + note MT5), `.env.example` (`MT5_TERMINAL_PATH` optionnel,
+  commenté — aucun secret), `config_settings.py` (`mt5_terminal_path`),
+  `docs/architecture.md` (arbo brokers + `/api/brokers`). Validé au navigateur
+  (Playwright : dropdown, params/note dynamiques, 503 honnête sur MT5, badge
+  header reflétant le broker actif, zéro fausse connexion). Tests : 1 test IB
+  d'info remplacé par la liste + 2 tests MT5 (503 sans paquet, broker inconnu),
+  **107 verts**. Reste : IB `connect()` (ib_async), routage d'ordres + feed
+  live des deux brokers.
 
 - **2026-07-20** — **Fenêtre broker : login/mdp retirés** (l'utilisateur a
   tranché après clarification). L'API Interactive Brokers **ne

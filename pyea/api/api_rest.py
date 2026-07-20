@@ -53,7 +53,9 @@ async def get_status() -> dict[str, Any]:
     return {
         "app_version": "0.1.0",
         "trading_mode": settings.trading_mode,
-        "broker": settings.broker_name,
+        # Broker ACTIF réel (peut différer de la config si l'utilisateur a
+        # basculé depuis la fenêtre de connexion), pas la valeur de config brute.
+        "broker": broker_runtime.active_name or settings.broker_name,
         "broker_connected": broker_runtime.is_connected(),  # état RÉEL de la gateway
         "market_data_live": MARKET_DATA_LIVE,  # False → l'UI marque « DÉMO »
         "strategy": settings.strategy_name,
@@ -63,23 +65,62 @@ async def get_status() -> dict[str, Any]:
     }
 
 
+# --- Connexion broker ---
+# Aucun broker supporté ne s'authentifie par login/mot de passe dans PyEA :
+# Interactive Brokers passe par TWS / IB Gateway (déjà logué), MetaTrader 5
+# par un terminal MT5 déjà ouvert et connecté à un compte. PyEA ne fait que
+# s'attacher — la fenêtre n'affiche donc que des paramètres en lecture seule
+# (+ une liste déroulante pour choisir le broker) et l'état réel.
+
+
+class BrokerSelectIn(BaseModel):
+    """Broker à activer avant connexion (facultatif : défaut = broker actif)."""
+
+    broker: str | None = None
+
+
+@router.get("/brokers")
+async def list_brokers() -> dict[str, Any]:
+    """Brokers disponibles (liste déroulante) + paramètres/état de chacun."""
+    settings = get_settings()
+    return {
+        "active": broker_runtime.active_name,
+        "trading_mode": settings.trading_mode,
+        "brokers": broker_runtime.available(settings),
+    }
+
+
 @router.post("/broker/connect")
-async def connect_broker() -> dict[str, Any]:
-    """Tente la connexion au broker. Retour HONNÊTE : tant que la gateway IB
-    réelle n'est pas implémentée, renvoie 501 (pas de fausse connexion)."""
+async def connect_broker(select: BrokerSelectIn | None = None) -> dict[str, Any]:
+    """Sélectionne (optionnel) puis connecte le broker.
+
+    Retour HONNÊTE : tant qu'une passerelle réelle n'est pas branchée (IB) ou
+    que sa dépendance/terminal manque (MetaTrader5 non installé), renvoie une
+    erreur explicite — JAMAIS une fausse connexion réussie.
+    """
+    if select is not None and select.broker:
+        try:
+            broker_runtime.select(select.broker)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except RuntimeError as exc:  # ex. changer de broker en étant connecté
+            raise HTTPException(status_code=409, detail=str(exc))
     try:
         await broker_runtime.connect()
     except NotImplementedError:
         raise HTTPException(
             status_code=501,
-            detail="Connexion au broker indisponible : la passerelle IB est "
+            detail="Connexion à ce broker indisponible : la passerelle est "
             "encore en développement (aucune fausse connexion n'est simulée).",
         )
-    except Exception as exc:  # échec réel (TWS éteint, identifiants…)
+    except ImportError as exc:  # dépendance broker absente (ex. MetaTrader5)
+        logger.warning("Dépendance broker manquante : %s", exc)
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:  # échec réel (TWS/terminal éteint…)
         logger.warning("Connexion broker échouée : %s", exc)
         raise HTTPException(status_code=502, detail=f"Connexion au broker échouée : {exc}")
     logger.info("Connexion au broker établie.")
-    return {"broker_connected": broker_runtime.is_connected()}
+    return {"active": broker_runtime.active_name, "broker_connected": broker_runtime.is_connected()}
 
 
 @router.post("/broker/disconnect")
@@ -87,28 +128,7 @@ async def disconnect_broker() -> dict[str, Any]:
     """Coupe la connexion au broker (toujours autorisé)."""
     await broker_runtime.disconnect()
     logger.info("Déconnexion du broker.")
-    return {"broker_connected": broker_runtime.is_connected()}
-
-
-# --- Connexion broker ---
-# L'API Interactive Brokers ne s'authentifie PAS par login/mot de passe :
-# c'est TWS / IB Gateway (déjà logué par l'utilisateur) qui gère le compte ;
-# PyEA s'y connecte via le socket API (host / port / client_id de config).
-# On n'affiche donc que ces paramètres, en lecture seule.
-
-
-@router.get("/broker")
-async def get_broker_info() -> dict[str, Any]:
-    """Infos de connexion (lecture seule) affichées dans la fenêtre broker."""
-    settings = get_settings()
-    return {
-        "broker": settings.broker_name,
-        "trading_mode": settings.trading_mode,
-        "host": settings.ib_host,
-        "port": settings.ib_port,  # paper ou live selon trading_mode
-        "client_id": settings.ib_client_id,
-        "connected": broker_runtime.is_connected(),
-    }
+    return {"active": broker_runtime.active_name, "broker_connected": broker_runtime.is_connected()}
 
 
 @router.get("/symbols")

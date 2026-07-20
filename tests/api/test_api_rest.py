@@ -153,19 +153,45 @@ def test_price_history_symbole_inconnu_404() -> None:
     assert response.status_code == 404
 
 
-def test_broker_info_lecture_seule() -> None:
-    # L'API IB ne prend pas de login/mdp : la fenêtre broker n'expose que les
-    # paramètres de socket (host/port/client_id) + l'état de connexion.
+def test_brokers_liste_deroulante() -> None:
+    # La fenêtre de connexion propose une liste déroulante des brokers
+    # disponibles (IB + MetaTrader 5), chacun avec ses paramètres en lecture
+    # seule + son état de connexion réel. Aucune notion d'identifiants.
     with _client() as client:
-        info = client.get("/api/broker").json()
+        data = client.get("/api/brokers").json()
         status = client.get("/api/status").json()
-    assert info["broker"] == "interactive_brokers"
-    assert info["trading_mode"] in ("paper", "live")
-    assert info["port"] > 0
-    assert info["connected"] is False
+    names = {b["name"] for b in data["brokers"]}
+    assert {"interactive_brokers", "metatrader5"} <= names
+    assert data["active"] == "interactive_brokers"  # défaut = config
+    ib = next(b for b in data["brokers"] if b["name"] == "interactive_brokers")
+    assert ib["label"] == "Interactive Brokers"
+    assert int(ib["params"]["Port"]) > 0
+    assert ib["connected"] is False and ib["active"] is True
+    mt5 = next(b for b in data["brokers"] if b["name"] == "metatrader5")
+    assert mt5["label"] == "MetaTrader 5"
+    assert mt5["connected"] is False and mt5["active"] is False
     # Plus aucune notion d'identifiants : l'endpoint credentials a disparu.
     assert client.get("/api/broker/credentials").status_code == 404
+    assert client.get("/api/broker").status_code == 404  # remplacé par /api/brokers
     assert "broker_credentials_set" not in status
+
+
+def test_connexion_metatrader_sans_paquet_erreur_honnete() -> None:
+    # MetaTrader5 n'est pas installé (sandbox Linux) : la connexion renvoie une
+    # 503 explicite (« installez MetaTrader5 »), JAMAIS une fausse réussite. Le
+    # broker sélectionné devient bien actif malgré l'échec (choix de l'utilisateur).
+    with _client() as client:
+        response = client.post("/api/broker/connect", json={"broker": "metatrader5"})
+        assert response.status_code == 503
+        assert "MetaTrader5" in response.json()["detail"]
+        assert client.get("/api/brokers").json()["active"] == "metatrader5"
+        assert client.get("/api/status").json()["broker_connected"] is False
+
+
+def test_connexion_broker_inconnu_404() -> None:
+    with _client() as client:
+        response = client.post("/api/broker/connect", json={"broker": "nimporte"})
+        assert response.status_code == 404
 
 
 def test_positions_vides_sans_broker() -> None:

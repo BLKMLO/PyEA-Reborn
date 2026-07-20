@@ -28,12 +28,27 @@ logger = get_logger(__name__)
 @register_gateway
 class InteractiveBrokersGateway(BrokerGateway):
     name = "interactive_brokers"
+    label = "Interactive Brokers"
 
     def __init__(self, settings: Settings) -> None:
         self._host = settings.ib_host
         self._port = settings.ib_port  # paper ou live selon trading_mode
         self._client_id = settings.ib_client_id
         self._connected = False
+
+    def connection_info(self) -> dict[str, str]:
+        return {
+            "Hôte": self._host,
+            "Port": str(self._port),
+            "Client ID": str(self._client_id),
+        }
+
+    def connection_hint(self) -> str:
+        return (
+            "L'authentification se fait dans TWS / IB Gateway (session déjà "
+            "ouverte). PyEA s'y connecte via le socket API — hôte, port et "
+            "client ID se règlent dans .env / config.yaml."
+        )
 
     async def connect(self) -> None:
         # L'API IB ne prend PAS de login/mot de passe : l'authentification est
