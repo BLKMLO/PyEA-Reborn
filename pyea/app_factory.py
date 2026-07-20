@@ -18,6 +18,7 @@ from pyea.api import api_backtest, api_pages, api_rest, api_training, api_websoc
 from pyea.config.config_settings import get_settings
 from pyea.core.core_logging import get_logger, setup_logging
 from pyea.storage.storage_database import init_db
+from pyea.storage.storage_training_runs import fail_orphan_runs
 
 STATIC_DIR = Path(__file__).resolve().parent / "web" / "static"
 
@@ -27,6 +28,12 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     logger = get_logger(__name__)
     init_db()
+    orphans = fail_orphan_runs()
+    if orphans:
+        logger.warning(
+            "%d entraînement(s) interrompu(s) par un arrêt du serveur marqué(s) « failed ».",
+            orphans,
+        )
     api_websocket.wire_event_bus()
     logger.info(
         "PyEA démarré — broker=%s mode=%s stratégie=%s",

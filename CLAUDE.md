@@ -80,6 +80,18 @@ jamais commité — modèle dans `.env.example`).
   (`/opt/pw-browsers/chromium`) — Chromium ne voit pas le proxy, d'où la
   vendorisation des libs front (qui était de toute façon souhaitable).
 
+## Notes environnement utilisateur (poste local, Windows)
+
+- **Python 3.13 + `pip install -r requirements.txt`** : install parfois
+  incomplète sans erreur bloquante affichée — symptôme observé chez
+  l'utilisateur : `uvicorn` présent mais `click` absent
+  (`ModuleNotFoundError` au lancement de `run_server.py`). Cause probable :
+  `lightgbm`/`pyarrow` sans wheel précompilé pour 3.13 sous Windows,
+  échec de compilation qui interrompt le reste de l'install. **Contourné**
+  en installant les paquets un par un (liste dans `requirements.txt`).
+  Recommandation : **Python 3.11 ou 3.12** pour une install garantie sans
+  y penser ; 3.13+ reste possible mais peut demander l'install manuelle.
+
 ## Documentation
 
 - `README.md` = présentation concise + démarrage rapide uniquement.
@@ -99,16 +111,30 @@ jamais commité — modèle dans `.env.example`).
 ## État du projet
 
 - Échafaudage complet et fonctionnel : serveur web, REST + WebSocket,
-  registres stratégie/broker, SQLAlchemy (SQLite), 21 tests verts.
+  registres stratégie/broker, SQLAlchemy (SQLite), 106 tests verts.
 - Dashboard live façon TradingView : chandeliers M1 au centre
   (**TradingView Lightweight Charts** : pan/zoom natifs, historique
   paginé via `?before=`, refresh incrémental `series.update` qui
-  préserve le défilement), watchlist à droite (clic = onglet, pastille
-  verte = paire armée), **bouton Trading (vert) / Stopped (rouge)** par
+  préserve le défilement), **légende OHLC en surimpression** (suit le
+  crosshair, retombe sur la dernière bougie « vivante » hors survol,
+  variation intra-bougie colorée) + état « Chargement… » au changement
+  d'onglet, watchlist à droite **façon « Market Watch »** (clic = onglet,
+  pastille verte = paire armée, **dernier prix + variation 24 h colorée**
+  par ligne, servis par `/api/symbols` enrichi via `_demo_quote`,
+  rafraîchis en place toutes les 10 s sans flicker), header en **badges
+  colorés** (pill mode PAPER/LIVE, pastille de connexion broker,
+  stratégie) + indicateur temps réel WS vert/rouge, sens BUY/SELL coloré
+  dans les positions, **bouton Trading (vert) / Stopped (rouge)** par
   paire à côté du titre du graphique — état par symbole persisté en
   SQLite (`storage_trading_state.py`, défaut = Stopped), relu à chaque
   changement d'onglet (`GET /api/trading/{symbol}`), bascule via
   `PUT /api/trading/{symbol}`, confirmation JS si mode live,
+  **badge broker du header cliquable → fenêtre modale d'identifiants**
+  (nom d'utilisateur + mot de passe gardés EN MÉMOIRE via
+  `brokers/broker_credentials.py`, jamais sur disque ni en log, effacés à
+  l'arrêt ; `GET/PUT/DELETE /api/broker/credentials`, mot de passe jamais
+  renvoyé par l'API — masqué en étoiles si déjà enregistré ; clé 🔑 sur le
+  badge quand configuré ; `broker_credentials_set` ajouté à `/api/status`),
   panneau bas Positions (fermées grisées, récentes en premier) / Logs,
   P&L total en bas à droite, **nav à 3 pages dans le header : Live |
   Backtest | Entraînement**. Rafraîchissement du seul graphique actif
@@ -151,9 +177,16 @@ jamais commité — modèle dans `.env.example`).
   `training.js`) : walk-forward à fenêtre expansive
   (`pyea/training/training_walkforward.py`, plis de test consécutifs,
   jamais de split aléatoire), exécution en **job de thread**
-  (`training_jobs.py`, un seul job actif à la fois, annulable),
+  (`training_jobs.py`, un seul job actif à la fois, annulable — annulation
+  re-vérifiée ENTRE les phases d'un pli, pas seulement entre plis),
   progression **temps réel** via bus topic `training.progress` → WebSocket
-  (+ polling `GET /api/training/jobs/{id}` en secours). Chaque run est
+  (+ polling `GET /api/training/jobs/{id}` en secours). Le **chargement de
+  l'historique vit DANS le job** (phase « Chargement… ») : le POST répond
+  immédiatement, la boucle asyncio ne gèle jamais. **Reprise après
+  rechargement de page** : `GET /api/training/current-job` + ré-attachement
+  automatique de l'UI (progression/annulation retrouvées). Les runs restés
+  « running » après un arrêt serveur sont marqués « failed » au démarrage
+  (`fail_orphan_runs`). Chaque run est
   historisé en SQLite (table `training_runs` : params, métriques OOS,
   statut) avec artefacts dans `data/models/<run>/` (metadata.json +
   `model.txt`/`features.json` par pli). Hook `Strategy.train(frame, params)`
@@ -201,6 +234,22 @@ jamais commité — modèle dans `.env.example`).
   taux de gain OOS ~50 % (test `test_pas_de_fuite_pnl_nul_sur_bruit`).
   Validé sur historique synthétique local (Dukascopy bloqué) — taux réels
   à juger sur vraies données.
+- **2026-07-19** — Install Windows/Python 3.13 en échec silencieux
+  (`click` manquant alors qu'`uvicorn` est présent) : `pip install
+  -r requirements.txt` s'arrête partiellement, probablement sur
+  `lightgbm`/`pyarrow` sans wheel pour 3.13. Résolu par install paquet par
+  paquet côté utilisateur. `requirements.txt` documente désormais la
+  commande de secours et recommande Python 3.11/3.12 pour éviter le
+  problème (voir « Notes environnement utilisateur »).
+- **2026-07-19** — Passe de fiabilisation après premiers retours de test
+  utilisateur (« impossible d'entraîner ») : chargement des données déplacé
+  dans le job (plus de gel de la boucle asyncio ni de clic « sans effet »),
+  reprise de job après rechargement de page (`/api/training/current-job`),
+  annulation réactive, runs orphelins nettoyés au démarrage, labeling
+  triple-barrier ~16× plus rapide (scan numpy par chunks, sortie prouvée
+  identique), `load_history` ne lit que les années de la période, le
+  téléchargeur survit à une année en échec (résumé en fin de run), erreurs
+  422 lisibles côté UI, `wss://` derrière HTTPS. 80 tests verts.
 - **Squelettes vides** (NotImplementedError) à développer plus tard :
   `InteractiveBrokersGateway` (appels ib_async réels), `MarketDataFeed`.
 
@@ -223,6 +272,116 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
    raccourci stratégie→broker, même « pour tester »).
 
 ## Journal de décisions
+
+- **2026-07-20** — **Passe « utilisateur maladroit »** (demande
+  explicite : sécuriser contre les erreurs d'usage, hors attaque
+  extérieure). Méthode : chaque bêtise a d'abord été REPRODUITE (3 × 500,
+  2 valeurs dangereuses acceptées, 2 crashs CLI), puis corrigée, puis
+  couverte par un test (92 → 106 verts). Corrections :
+  (1) **Config bornée par pydantic** (`Field(ge/gt/le)`) :
+  `chart_refresh_seconds: 0` (le front aurait martelé l'API en boucle) et
+  `max_position_size: -3` (ordres INVERSÉS en live !) étaient acceptés
+  silencieusement — désormais refusés au démarrage ; `max_position_size`
+  passé `int → float` au passage (0.5 lot légitime). (2) **Démarrages CLI
+  lisibles** : YAML malformé, valeur invalide (champ + valeur reçue
+  affichés via `load_settings_or_die`, partagé par les deux scripts) et
+  **port déjà occupé** (pré-check socket : « PyEA tourne probablement
+  déjà ») = message net, plus de traceback. (3) **`load_history`
+  blindé** : fichiers parasites ignorés (`file_year` : suffixe non
+  numérique — une copie `_backup.parquet` cassait TOUTE la page backtest
+  via `int()`), doublons d'index dédupliqués (copie d'année sous deux
+  noms = bougies doublées silencieuses), Parquet corrompu → erreur
+  nommant le fichier et le remède, période inversée refusée. (4) **API** :
+  erreurs de données → 400/422 avec détail (plus jamais 500) ;
+  validateur pydantic « début ≤ fin » sur les requêtes backtest ET
+  entraînement. (5) **Téléchargeur** : validation de TOUS les symboles et
+  des années AVANT le premier octet téléchargé (une faute de frappe ne
+  tue plus un run de plusieurs heures ; message listant les symboles
+  supportés). Conséquence assumée : une config invalide EMPÊCHE le
+  démarrage (fail-fast choisi contre le clamp silencieux — un logiciel
+  de trading ne doit jamais deviner ce que l'utilisateur voulait).
+
+- **2026-07-20** — **Saisie des identifiants broker depuis le dashboard**
+  (demande utilisateur : clic sur le badge broker → fenêtre de dialogue,
+  identifiants gardés « jusqu'à ce que le serveur soit éteint », étoiles si
+  déjà enregistrés). Décisions : (1) **stockage EN MÉMOIRE uniquement**
+  (`brokers/broker_credentials.py`, singleton de module au même statut que
+  `event_bus`/`web_log_buffer`) — jamais SQLite, disque ou `.env` : c'est
+  exactement la sémantique « volatile jusqu'à l'arrêt » voulue, et ça
+  respecte la règle « aucun secret dans un fichier versionné ». **On a
+  volontairement REFUSÉ de persister** (sinon un mot de passe traînerait sur
+  le disque du VPS). (2) **Le mot de passe ne fuit JAMAIS par l'API** :
+  `GET /api/broker/credentials` ne renvoie que `configured` + l'identifiant
+  (utile pour reconnaître le compte) ; le front masque par des étoiles
+  (placeholder) quand `configured`, et **mot de passe vide au PUT = on
+  conserve l'existant** (l'utilisateur ne re-saisit pas les étoiles), tandis
+  que mot de passe vide sans identifiants préalables = 422. Jamais de mot de
+  passe dans les logs non plus. (3) **Badge broker rendu cliquable** dans
+  `charts.js` (le header est le seul endroit qui nomme déjà le broker) +
+  clé 🔑 quand configuré ; modale en Tailwind pur dans `dashboard.html`
+  (zéro nouvelle lib). (4) `broker_credentials_set` ajouté à `/api/status`.
+  (5) **Câblage futur préparé** : `InteractiveBrokersGateway.connect()`
+  lira `broker_credentials.password` (host/port/client_id restent en
+  config) — noté dans le code. Conséquences traitées : docs/architecture.md
+  (arbo brokers + endpoints), pas de changement config/.gitignore (rien de
+  persisté). Validé au navigateur (Playwright) : ouverture, enregistrement,
+  clé sur le badge, réouverture avec étoiles + identifiant prérempli +
+  bouton Effacer, zéro erreur console. 11 tests ajoutés (store + API,
+  dont fuite du mot de passe vérifiée), **92 verts**.
+
+- **2026-07-20** — Passe d'ergonomie du dashboard live, en s'inspirant des
+  terminaux existants (TradingView / MetaTrader 5). Constat : la page Live
+  était fonctionnelle mais « nue » face aux logiciels pros. Améliorations,
+  toutes conformes à l'architecture (données via `_demo_*`, graphiques dans
+  `static/js/`, libs vendorisées, français). (1) **Légende OHLC en
+  surimpression** (signature TradingView) : `subscribeCrosshairMove` →
+  O/H/L/C + variation intra-bougie colorée ; fige la bougie survolée
+  (`state.hovering`), retombe sur la dernière bougie « vivante » après un
+  `series.update`. (2) **Watchlist « Market Watch »** : `/api/symbols`
+  enrichi de `last` + `change_pct` (helper `_demo_quote`, **même marche
+  aléatoire déterministe** que les bougies → prix watchlist == close du
+  graphique, testé) ; rendu **mis à jour en place** (structure bâtie une
+  fois, seuls prix/variation/pastille changent → pas de flicker, onglet
+  actif préservé), rafraîchi toutes les 10 s. (3) **Header en badges**
+  (mode PAPER bleu / LIVE ambre = prudence, pastille de connexion broker,
+  stratégie) au lieu d'une phrase ; indicateur WS « ● temps réel » vert /
+  « ● hors ligne » rouge (aussi sur la page Entraînement). (4) **Sens
+  BUY/SELL coloré** (vert/rouge) dans les positions (live) et les trades
+  (backtest). (5) **États vides cohérents** : la page Backtest a désormais
+  son placeholder « Lancez un backtest… » (parité avec Entraînement) au
+  lieu de coquilles vides. Décisions de fond : prix de la watchlist calculé
+  côté serveur dans `_demo_quote` (jamais dans le front) pour rester la
+  SEULE source des données de démo (le câblage réel ne touchera que les
+  `_demo_*`) ; refus d'ajouter un sélecteur de timeframe sur le live (le
+  flux ne sert que du M1 démo — ce serait une feature backend, hors passe
+  d'ergonomie). Validé au navigateur (Playwright) : légende au survol,
+  watchlist chiffrée, badges, zéro erreur console sur les 3 pages. 1 test
+  ajouté (cohérence prix watchlist/graphique), **81 verts**.
+
+- **2026-07-19** — Fiabilisation post-retours de test (l'utilisateur n'a
+  « même pas pu entraîner »). Cause racine reproduite en navigateur : le
+  POST `/api/training/run` chargeait l'historique DANS la boucle asyncio
+  (UI entièrement gelée pendant des secondes/minutes) et, après un
+  rechargement de page en plein run, le job devenait invisible — bouton
+  muet répondant « un entraînement est déjà en cours », sans progression ni
+  annulation possible. Décisions : (1) le chargement des données devient la
+  **première phase du job** (POST immédiat, phase « Chargement… » visible,
+  période invalide/trop courte = échec de job avec message clair — le 404
+  « aucun historique » reste synchrone) ; (2) **ré-attachement UI** via
+  `GET /api/training/current-job` au chargement de la page ; (3) annulation
+  re-vérifiée entre les phases d'un pli ; (4) `fail_orphan_runs()` au
+  démarrage (un arrêt serveur laissait des runs « running » à jamais) ;
+  (5) labeling triple-barrier en **chunks numpy** (~16×, test d'équivalence
+  contre une réimplémentation naïve, départage stop/TP inclus) ;
+  (6) `load_history` filtre les fichiers par année de la période ;
+  (7) téléchargeur : une année en échec est journalisée et sautée (résumé
+  final) au lieu de faire crasher tout le run de plusieurs heures ;
+  (8) front : erreurs de validation 422 rendues lisibles (fini
+  « [object Object] »), `wss://` si HTTPS, indicateur WS honnête (vide sur
+  les pages sans WebSocket), fetch robustes aux erreurs réseau, barre de
+  progression non ré-affichée par le message « done ». Validé en
+  navigateur (Playwright) : feedback immédiat au clic, reprise après
+  reload, annulation, run complet — zéro erreur console. 80 tests verts.
 
 - **2026-07-18** — Scaffold initial (branche `claude/new-session-b0govl`).
   Choix : FastAPI + HTMX/Tailwind/Chart.js via CDN (zéro build front) ;

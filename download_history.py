@@ -27,7 +27,10 @@ from pyea.data.data_history_downloader import download_history
 
 
 def main() -> None:
-    settings = get_settings()
+    # Erreurs de config lisibles (mêmes règles que run_server.py).
+    from run_server import load_settings_or_die
+
+    settings = load_settings_or_die()
     setup_logging(settings.log_level, settings.log_file, settings.log_web_buffer_size)
     logger = get_logger(__name__)
 
@@ -61,15 +64,23 @@ def main() -> None:
         "Téléchargement : %d symboles, %d → %d, vers %s",
         len(args.symbols), args.start_year, args.end_year, args.data_dir,
     )
-    written = asyncio.run(
-        download_history(
-            symbols=[symbol.upper() for symbol in args.symbols],
-            start_year=args.start_year,
-            end_year=args.end_year,
-            data_dir=args.data_dir,
-            force=args.force,
+    try:
+        written = asyncio.run(
+            download_history(
+                symbols=[symbol.upper() for symbol in args.symbols],
+                start_year=args.start_year,
+                end_year=args.end_year,
+                data_dir=args.data_dir,
+                force=args.force,
+            )
         )
-    )
+    except (KeyError, ValueError) as exc:
+        # Symbole inconnu ou années incohérentes : détecté AVANT tout
+        # téléchargement — message net, pas de traceback.
+        import sys
+
+        print(f"\nERREUR : {str(exc).strip(chr(39))}", file=sys.stderr)
+        sys.exit(1)
     total = sum(len(years) for years in written.values())
     logger.info("Terminé : %d fichiers année/symbole écrits.", total)
 

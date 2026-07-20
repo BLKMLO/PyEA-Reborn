@@ -122,6 +122,13 @@ def run_walkforward(
             )
         )
 
+        # Re-vérifié entre les phases : un pli peut durer des minutes, ne pas
+        # attendre le pli suivant pour honorer une annulation.
+        if cancelled():
+            logger.info("Walk-forward annulé après l'entraînement du pli %d/%d.", i + 1, n_folds)
+            folds.append(fold)
+            return _report(symbol, timeframe, folds, oos_equity, cancelled=True)
+
         progress({"fold": i + 1, "total": n_folds, "phase": "test",
                   "message": f"Pli {i + 1}/{n_folds} : backtest out-of-sample…"})
         engine = BacktestEngine(strategy, risk_manager)

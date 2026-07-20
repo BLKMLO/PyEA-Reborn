@@ -19,6 +19,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from pyea.brokers.broker_credentials import broker_credentials
 from pyea.config.config_settings import get_settings
 from pyea.core.core_logging import get_logger, web_log_buffer
 from pyea.storage.storage_trading_state import (
@@ -46,6 +47,7 @@ async def get_status() -> dict[str, Any]:
         "trading_mode": settings.trading_mode,
         "broker": settings.broker_name,
         "broker_connected": False,  # Branché sur la gateway réelle plus tard.
+        "broker_credentials_set": broker_credentials.is_configured(),
         "strategy": settings.strategy_name,
         "strategy_enabled": settings.strategy_enabled,
         "available_strategies": list_strategies(),
@@ -53,21 +55,92 @@ async def get_status() -> dict[str, Any]:
     }
 
 
+# --- Identifiants broker (saisis au runtime, gardés en mémoire) ---
+
+
+class BrokerCredentialsIn(BaseModel):
+    """Corps du PUT : le mot de passe est optionnel pour permettre de ne
+    changer que l'identifiant sans re-saisir le mot de passe masqué."""
+
+    username: str
+    password: str | None = None
+
+
+def _broker_credentials_view() -> dict[str, Any]:
+    """Vue publique des identifiants : JAMAIS le mot de passe en clair.
+
+    On renvoie l'identifiant (utile pour reconnaître le compte) et un
+    booléen ``configured`` ; le front masque le mot de passe par des
+    étoiles lorsque ``configured`` est vrai.
+    """
+    return {
+        "broker": get_settings().broker_name,
+        "configured": broker_credentials.is_configured(),
+        "username": broker_credentials.username,
+    }
+
+
+@router.get("/broker/credentials")
+async def get_broker_credentials() -> dict[str, Any]:
+    """Indique si des identifiants broker sont en mémoire (sans les révéler)."""
+    return _broker_credentials_view()
+
+
+@router.put("/broker/credentials")
+async def put_broker_credentials(payload: BrokerCredentialsIn) -> dict[str, Any]:
+    """Enregistre les identifiants broker EN MÉMOIRE (jusqu'à l'arrêt serveur).
+
+    Mot de passe vide + identifiants déjà présents = on garde le mot de
+    passe existant (l'utilisateur n'a pas re-saisi les étoiles). Mot de
+    passe vide sans identifiants préalables = erreur 422.
+    """
+    username = payload.username.strip()
+    if not username:
+        raise HTTPException(status_code=422, detail="Nom d'utilisateur requis.")
+    password = payload.password or ""
+    if not password:
+        if not broker_credentials.is_configured():
+            raise HTTPException(status_code=422, detail="Mot de passe requis.")
+        broker_credentials.update_username(username)
+    else:
+        broker_credentials.set(username, password)
+    # Journalisation SANS le mot de passe (jamais de secret dans les logs).
+    logger.info("Identifiants broker enregistrés (utilisateur : %s).", username)
+    return _broker_credentials_view()
+
+
+@router.delete("/broker/credentials")
+async def delete_broker_credentials() -> dict[str, Any]:
+    """Efface les identifiants broker de la mémoire."""
+    broker_credentials.clear()
+    logger.info("Identifiants broker effacés.")
+    return _broker_credentials_view()
+
+
 @router.get("/symbols")
 async def get_symbols() -> dict[str, Any]:
-    """Watchlist du dashboard : chaque symbole + badge « en trading ».
+    """Watchlist du dashboard (façon « Market Watch ») : chaque symbole +
+    dernier prix + variation sur 24 h + badge « en trading ».
 
     Watchlist = history.instruments ; « en trading » = interrupteur
-    par symbole (bouton Trading/Stopped), persisté en base.
+    par symbole (bouton Trading/Stopped), persisté en base. Prix et
+    variation sont des données de DÉMO déterministes (_demo_quote),
+    cohérentes avec les bougies du graphique (même marche aléatoire).
     """
     settings = get_settings()
     states = get_trading_states()
-    return {
-        "symbols": [
-            {"symbol": symbol, "trading": states.get(symbol, False)}
-            for symbol in settings.history_instruments
-        ],
-    }
+    symbols = []
+    for symbol in settings.history_instruments:
+        last, change_pct = _demo_quote(symbol)
+        symbols.append(
+            {
+                "symbol": symbol,
+                "trading": states.get(symbol, False),
+                "last": last,
+                "change_pct": change_pct,
+            }
+        )
+    return {"symbols": symbols}
 
 
 class TradingToggle(BaseModel):
@@ -155,6 +228,30 @@ def _demo_candles(symbol: str, end_minute: int, points: int) -> list[dict[str, f
             )
         price = close
     return candles
+
+
+def _demo_quote(symbol: str) -> tuple[float, float]:
+    """Dernier prix et variation sur ~24 h (démo déterministe).
+
+    Rejoue la MÊME marche aléatoire que ``_demo_candles`` (seed
+    symbole+minute) depuis l'origine fixe jusqu'à maintenant : le prix
+    renvoyé est donc exactement le close de la dernière bougie du
+    graphique. La variation compare le prix courant à celui d'il y a
+    1440 minutes (une « journée » de démo).
+    """
+    origin = _demo_origin_minute()
+    now_minute = int(datetime.now(timezone.utc).timestamp() // 60)
+    base = _base_price(symbol)
+    day_ago_minute = now_minute - 1440
+    price = base
+    reference = base  # avant un jour complet d'historique : pas de variation
+    for minute in range(origin, now_minute + 1):
+        rng = random.Random(f"{symbol}:{minute}")
+        price = price + rng.uniform(-1, 1) * base * 0.0008
+        if minute == day_ago_minute:
+            reference = price
+    change_pct = (price - reference) / reference * 100 if reference else 0.0
+    return round(price, 5), round(change_pct, 2)
 
 
 @router.get("/charts/price-history")

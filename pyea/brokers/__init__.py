@@ -7,6 +7,13 @@
 """
 
 from pyea.brokers import broker_interactive_brokers  # noqa: F401
+from pyea.brokers.broker_credentials import BrokerCredentials, broker_credentials
 from pyea.brokers.broker_gateway import BrokerGateway, get_gateway, register_gateway
 
-__all__ = ["BrokerGateway", "get_gateway", "register_gateway"]
+__all__ = [
+    "BrokerGateway",
+    "BrokerCredentials",
+    "broker_credentials",
+    "get_gateway",
+    "register_gateway",
+]

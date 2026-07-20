@@ -84,14 +84,46 @@ def test_definition_modele() -> None:
     assert unknown.status_code == 404
 
 
+def test_current_job_vide_au_repos(training_env: Path) -> None:
+    """Sans run en cours, /current-job répond null (et ne matche pas la
+    route /jobs/{id} — l'ordre de déclaration compte)."""
+    with TestClient(create_app()) as client:
+        response = client.get("/api/training/current-job")
+    assert response.status_code == 200
+    assert response.json() == {"job": None}
+
+
+def test_runs_orphelins_marques_failed_au_demarrage(training_env: Path) -> None:
+    """Un serveur arrêté en plein entraînement laissait la ligne « running »
+    pour toujours ; au démarrage suivant elle doit passer « failed »."""
+    from pyea.storage.storage_database import init_db
+    from pyea.storage.storage_training_runs import create_run, list_runs
+
+    init_db()
+    create_run("run-orphelin", "couleuvre_v0_1", "EURUSD", "H1", 3, {})
+    # Le lifespan de create_app appelle fail_orphan_runs().
+    with TestClient(create_app()) as client:
+        client.get("/api/status")
+    statuses = {run["id"]: run["status"] for run in list_runs()}
+    assert statuses["run-orphelin"] == "failed"
+
+
 def test_erreurs_entrainement(training_env: Path) -> None:
     with TestClient(create_app()) as client:
         no_data = client.post("/api/training/run", json={"symbol": "GBPUSD"})
+        # Historique trop court : détecté APRÈS le chargement, qui vit dans
+        # le job (le POST répond tout de suite) → le job échoue proprement
+        # avec un message actionnable, et le run est historisé « failed ».
         too_short = client.post(
             "/api/training/run",
             json={"symbol": "EURUSD", "timeframe": "D1", "folds": 20},
         )
+        assert too_short.status_code == 200
+        job = _wait_for_job(client, too_short.json()["job_id"])
         unknown_job = client.get("/api/training/jobs/nimporte")
+        runs = client.get("/api/training/runs").json()["runs"]
     assert no_data.status_code == 404
-    assert too_short.status_code == 400
+    assert job["status"] == "failed"
+    assert "trop court" in job["error"]
+    assert runs[0]["status"] == "failed"
     assert unknown_job.status_code == 404

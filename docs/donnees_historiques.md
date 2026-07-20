@@ -38,6 +38,12 @@ fichiers d'années. Colonnes : `bid_open/high/low/close`,
 C'est ce layout que l'interface de backtest (`/backtest`) découvre via
 `/api/backtest/datasets` et rejoue via `/api/backtest/run`.
 
+Robustesse : les fichiers au suffixe non numérique (copies de sauvegarde
+manuelles, renommages) sont **ignorés**, les bougies dupliquées entre
+fichiers sont dédupliquées, et un Parquet corrompu produit une erreur
+nommant le fichier fautif — le supprimer puis relancer
+`download_history.py` re-télécharge l'année.
+
 ## Lecture et timeframes
 
 ```python

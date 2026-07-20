@@ -1,3 +1,15 @@
+# Installation : `pip install -r requirements.txt` peut échouer PARTIELLEMENT
+# sans erreur visible (pip installe paquet par paquet dans certains cas) —
+# symptôme observé : uvicorn présent mais `click` absent au lancement. Cause
+# typique : lightgbm/pyarrow sans wheel précompilé pour une version Python
+# trop récente (ex. 3.13 sous Windows), qui échouent à la compilation et
+# interrompent le reste de l'install. Deux solutions :
+#   1. Utiliser Python 3.11 ou 3.12 (wheels garanties pour tous ces paquets).
+#   2. Si 3.13 (ou plus récent) est imposé, installer un par un pour isoler
+#      le paquet fautif :
+#      pip install fastapi "uvicorn[standard]" jinja2 pydantic-settings PyYAML ^
+#        SQLAlchemy ib_async pandas numpy pyarrow lightgbm pytest httpx
+
 # Backend web
 fastapi>=0.115
 uvicorn[standard]>=0.30

@@ -1,12 +1,23 @@
 """Tests fumée de l'API : l'app démarre et les endpoints clés répondent."""
 
+import pytest
 from fastapi.testclient import TestClient
 
 from pyea.app_factory import create_app
+from pyea.brokers.broker_credentials import broker_credentials
 
 
 def _client() -> TestClient:
     return TestClient(create_app())
+
+
+@pytest.fixture(autouse=True)
+def _reset_broker_credentials():
+    """Le store d'identifiants est un singleton de module : on l'isole
+    entre tests pour éviter toute fuite d'état."""
+    broker_credentials.clear()
+    yield
+    broker_credentials.clear()
 
 
 def test_dashboard_repond() -> None:
@@ -47,6 +58,28 @@ def test_symbols_watchlist() -> None:
     assert response.status_code == 200
     symbols = {item["symbol"] for item in data["symbols"]}
     assert {"EURUSD", "XAUUSD", "US500"} <= symbols
+    # Façon « Market Watch » : chaque ligne porte un prix + variation.
+    eurusd = next(item for item in data["symbols"] if item["symbol"] == "EURUSD")
+    assert {"last", "change_pct", "trading"} <= set(eurusd)
+    assert isinstance(eurusd["last"], (int, float)) and eurusd["last"] > 0
+    assert isinstance(eurusd["change_pct"], (int, float))
+
+
+def test_symbols_prix_coherent_avec_le_graphique() -> None:
+    # Le prix de la watchlist est un vrai close de la série du graphique
+    # (même marche aléatoire déterministe) — pas un nombre indépendant.
+    # On tolère un basculement de minute entre les deux requêtes : le prix
+    # doit égaler le close de l'une des deux dernières bougies.
+    with _client() as client:
+        last = next(
+            item["last"]
+            for item in client.get("/api/symbols").json()["symbols"]
+            if item["symbol"] == "EURUSD"
+        )
+        candles = client.get(
+            "/api/charts/price-history?symbol=EURUSD&points=10"
+        ).json()["candles"]
+    assert last in {candles[-1]["close"], candles[-2]["close"]}
 
 
 def test_trading_toggle_et_verification_au_changement_d_onglet() -> None:
@@ -112,6 +145,72 @@ def test_price_history_symbole_inconnu_404() -> None:
     with _client() as client:
         response = client.get("/api/charts/price-history?symbol=NIMPORTE")
     assert response.status_code == 404
+
+
+def test_broker_credentials_non_configure_par_defaut() -> None:
+    with _client() as client:
+        response = client.get("/api/broker/credentials")
+        status = client.get("/api/status").json()
+    data = response.json()
+    assert response.status_code == 200
+    assert data["configured"] is False
+    assert data["username"] == ""
+    assert status["broker_credentials_set"] is False
+
+
+def test_broker_credentials_enregistrement_et_masquage() -> None:
+    with _client() as client:
+        put = client.put(
+            "/api/broker/credentials",
+            json={"username": "marianne", "password": "secret"},
+        )
+        assert put.status_code == 200
+        assert put.json()["configured"] is True
+        # Le mot de passe ne fuit JAMAIS via l'API.
+        get = client.get("/api/broker/credentials").json()
+        assert get["username"] == "marianne"
+        assert "password" not in get
+        assert "secret" not in str(get)
+        assert client.get("/api/status").json()["broker_credentials_set"] is True
+
+
+def test_broker_credentials_mdp_vide_conserve_l_existant() -> None:
+    with _client() as client:
+        client.put(
+            "/api/broker/credentials",
+            json={"username": "marianne", "password": "secret"},
+        )
+        # Re-PUT sans mot de passe : identifiant changé, mdp conservé.
+        put = client.put("/api/broker/credentials", json={"username": "marianne2"})
+        assert put.status_code == 200
+    assert broker_credentials.username == "marianne2"
+    assert broker_credentials.password == "secret"
+
+
+def test_broker_credentials_mdp_requis_si_rien_enregistre() -> None:
+    with _client() as client:
+        put = client.put("/api/broker/credentials", json={"username": "marianne"})
+    assert put.status_code == 422
+
+
+def test_broker_credentials_username_requis() -> None:
+    with _client() as client:
+        put = client.put(
+            "/api/broker/credentials", json={"username": "  ", "password": "x"}
+        )
+    assert put.status_code == 422
+
+
+def test_broker_credentials_suppression() -> None:
+    with _client() as client:
+        client.put(
+            "/api/broker/credentials",
+            json={"username": "marianne", "password": "secret"},
+        )
+        delete = client.delete("/api/broker/credentials")
+        assert delete.status_code == 200
+        assert delete.json()["configured"] is False
+        assert client.get("/api/broker/credentials").json()["configured"] is False
 
 
 def test_positions_structure_et_pnl_total() -> None:

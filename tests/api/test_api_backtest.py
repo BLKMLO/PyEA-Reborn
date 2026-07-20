@@ -74,3 +74,38 @@ def test_run_erreurs_explicites(history_dir: None) -> None:
     assert no_data.status_code == 404
     assert bad_timeframe.status_code == 400
     assert bad_strategy.status_code == 404
+
+
+def test_datasets_ignore_fichiers_parasites(history_dir: None, tmp_path: Path) -> None:
+    """Une copie de sauvegarde manuelle ne doit plus casser toute la page
+    backtest (500 sur /datasets avant la passe de sécurisation)."""
+    data_dir = Path(get_settings().history_data_dir)
+    source = data_dir / "EURUSD" / "EURUSD_m1_2024.parquet"
+    (data_dir / "EURUSD" / "EURUSD_m1_backup.parquet").write_bytes(source.read_bytes())
+    (data_dir / "notes.txt").write_text("mémo", encoding="utf-8")  # fichier égaré
+
+    with _client() as client:
+        response = client.get("/api/backtest/datasets")
+    assert response.status_code == 200
+    assert response.json()["datasets"] == [{"symbol": "EURUSD", "years": [2024]}]
+
+
+def test_run_parquet_corrompu_400_actionnable(history_dir: None) -> None:
+    data_dir = Path(get_settings().history_data_dir)
+    (data_dir / "EURUSD" / "EURUSD_m1_2023.parquet").write_bytes(b"pas du parquet")
+
+    with _client() as client:
+        response = client.post("/api/backtest/run", json={"symbol": "EURUSD"})
+    assert response.status_code == 400
+    assert "illisible" in response.json()["detail"]
+    assert "EURUSD_m1_2023" in response.json()["detail"]
+
+
+def test_run_periode_inversee_422(history_dir: None) -> None:
+    with _client() as client:
+        response = client.post(
+            "/api/backtest/run",
+            json={"symbol": "EURUSD", "start": "2024-03-02", "end": "2024-03-01"},
+        )
+    assert response.status_code == 422
+    assert "Période invalide" in response.text
