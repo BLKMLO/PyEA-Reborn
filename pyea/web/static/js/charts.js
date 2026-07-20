@@ -360,13 +360,98 @@ async function loadStatus() {
   const modePill = live ? "bg-amber-600 text-white" : "bg-sky-700 text-sky-100";
   const brokerDot = status.broker_connected ? "bg-emerald-400" : "bg-red-500";
   const strategyColor = status.strategy_enabled ? "text-emerald-400" : "text-slate-500";
+  // Le badge broker est CLIQUABLE : il ouvre la fenêtre de saisie des
+  // identifiants. Une clé (🔑) signale que des identifiants sont en mémoire.
+  const credsMark = status.broker_credentials_set
+    ? `<span title="Identifiants enregistrés">🔑</span>`
+    : "";
   document.getElementById("header-status").innerHTML =
     `<span class="inline-flex items-center gap-2">` +
     `<span class="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${modePill}">${status.trading_mode}</span>` +
-    `<span class="inline-flex items-center gap-1"><span class="h-1.5 w-1.5 rounded-full ${brokerDot}"></span>${status.broker}</span>` +
+    `<button id="broker-badge" type="button" title="Configurer les identifiants du broker"` +
+    ` class="inline-flex items-center gap-1 rounded px-1 hover:bg-slate-700">` +
+    `<span class="h-1.5 w-1.5 rounded-full ${brokerDot}"></span>${status.broker}${credsMark}</button>` +
     `<span class="text-slate-500">·</span>` +
     `<span class="${strategyColor}">${status.strategy}</span>` +
     `</span>`;
+  document.getElementById("broker-badge").addEventListener("click", openBrokerModal);
+}
+
+// --- Identifiants broker (fenêtre modale) ----------------------------------
+
+function setBrokerError(message) {
+  const el = document.getElementById("broker-error");
+  el.textContent = message || "";
+  el.classList.toggle("hidden", !message);
+}
+
+async function openBrokerModal() {
+  setBrokerError("");
+  const modal = document.getElementById("broker-modal");
+  const usernameInput = document.getElementById("broker-username");
+  const passwordInput = document.getElementById("broker-password");
+  const hint = document.getElementById("broker-password-hint");
+  const clearBtn = document.getElementById("broker-clear");
+  let data = { configured: false, username: "", broker: "broker" };
+  try {
+    const response = await fetch("/api/broker/credentials");
+    if (response.ok) data = await response.json();
+  } catch (err) {
+    // Réseau HS : on ouvre quand même avec des champs vides.
+  }
+  document.getElementById("broker-modal-name").textContent = data.broker;
+  usernameInput.value = data.username || "";
+  passwordInput.value = "";
+  // Déjà enregistré : le mot de passe s'affiche en étoiles (placeholder),
+  // laisser vide = on garde le mot de passe en mémoire.
+  passwordInput.placeholder = data.configured ? "••••••••" : "";
+  hint.classList.toggle("hidden", !data.configured);
+  clearBtn.classList.toggle("hidden", !data.configured);
+  modal.classList.remove("hidden");
+  modal.classList.add("flex");
+  usernameInput.focus();
+}
+
+function closeBrokerModal() {
+  const modal = document.getElementById("broker-modal");
+  modal.classList.add("hidden");
+  modal.classList.remove("flex");
+}
+
+async function submitBrokerCredentials(event) {
+  event.preventDefault();
+  setBrokerError("");
+  const username = document.getElementById("broker-username").value.trim();
+  const password = document.getElementById("broker-password").value;
+  try {
+    const response = await fetch("/api/broker/credentials", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      setBrokerError(err.detail || "Enregistrement impossible.");
+      return;
+    }
+  } catch (err) {
+    setBrokerError("Réseau indisponible.");
+    return;
+  }
+  closeBrokerModal();
+  await loadStatus(); // rafraîchit le badge (clé 🔑)
+}
+
+async function clearBrokerCredentials() {
+  setBrokerError("");
+  try {
+    await fetch("/api/broker/credentials", { method: "DELETE" });
+  } catch (err) {
+    setBrokerError("Réseau indisponible.");
+    return;
+  }
+  closeBrokerModal();
+  await loadStatus();
 }
 
 function initWebSocket() {
@@ -395,6 +480,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   initBottomTabs();
   initWebSocket();
   document.getElementById("trading-toggle").addEventListener("click", toggleTrading);
+  // Fenêtre d'identifiants broker (boutons statiques câblés une fois).
+  document.getElementById("broker-form").addEventListener("submit", submitBrokerCredentials);
+  document.getElementById("broker-clear").addEventListener("click", clearBrokerCredentials);
+  document.getElementById("broker-cancel").addEventListener("click", closeBrokerModal);
+  document.getElementById("broker-modal-close").addEventListener("click", closeBrokerModal);
+  document.getElementById("broker-modal").addEventListener("click", (event) => {
+    if (event.target.id === "broker-modal") closeBrokerModal(); // clic sur le fond
+  });
   await loadStatus();
   await loadSymbols();      // déclenche le premier rendu du graphique
   await refreshPositions();

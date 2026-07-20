@@ -13,6 +13,7 @@ lors du branchement de l'exécution.
 
 from __future__ import annotations
 
+from pyea.brokers.broker_credentials import broker_credentials
 from pyea.brokers.broker_gateway import (
     BrokerGateway,
     TickCallback,
@@ -36,6 +37,11 @@ class InteractiveBrokersGateway(BrokerGateway):
         self._connected = False
 
     async def connect(self) -> None:
+        # Host/port/client_id viennent de la config ; les identifiants de
+        # connexion (nom d'utilisateur + mot de passe) sont saisis au runtime
+        # depuis le dashboard et lus ici via ``broker_credentials`` (jamais
+        # écrits sur disque).
+        _ = broker_credentials.password  # utilisé par IB.connectAsync à venir
         raise NotImplementedError("À implémenter avec ib_async (IB.connectAsync).")
 
     async def disconnect(self) -> None:

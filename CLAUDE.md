@@ -129,6 +129,12 @@ jamais commité — modèle dans `.env.example`).
   SQLite (`storage_trading_state.py`, défaut = Stopped), relu à chaque
   changement d'onglet (`GET /api/trading/{symbol}`), bascule via
   `PUT /api/trading/{symbol}`, confirmation JS si mode live,
+  **badge broker du header cliquable → fenêtre modale d'identifiants**
+  (nom d'utilisateur + mot de passe gardés EN MÉMOIRE via
+  `brokers/broker_credentials.py`, jamais sur disque ni en log, effacés à
+  l'arrêt ; `GET/PUT/DELETE /api/broker/credentials`, mot de passe jamais
+  renvoyé par l'API — masqué en étoiles si déjà enregistré ; clé 🔑 sur le
+  badge quand configuré ; `broker_credentials_set` ajouté à `/api/status`),
   panneau bas Positions (fermées grisées, récentes en premier) / Logs,
   P&L total en bas à droite, **nav à 3 pages dans le header : Live |
   Backtest | Entraînement**. Rafraîchissement du seul graphique actif
@@ -266,6 +272,34 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
    raccourci stratégie→broker, même « pour tester »).
 
 ## Journal de décisions
+
+- **2026-07-20** — **Saisie des identifiants broker depuis le dashboard**
+  (demande utilisateur : clic sur le badge broker → fenêtre de dialogue,
+  identifiants gardés « jusqu'à ce que le serveur soit éteint », étoiles si
+  déjà enregistrés). Décisions : (1) **stockage EN MÉMOIRE uniquement**
+  (`brokers/broker_credentials.py`, singleton de module au même statut que
+  `event_bus`/`web_log_buffer`) — jamais SQLite, disque ou `.env` : c'est
+  exactement la sémantique « volatile jusqu'à l'arrêt » voulue, et ça
+  respecte la règle « aucun secret dans un fichier versionné ». **On a
+  volontairement REFUSÉ de persister** (sinon un mot de passe traînerait sur
+  le disque du VPS). (2) **Le mot de passe ne fuit JAMAIS par l'API** :
+  `GET /api/broker/credentials` ne renvoie que `configured` + l'identifiant
+  (utile pour reconnaître le compte) ; le front masque par des étoiles
+  (placeholder) quand `configured`, et **mot de passe vide au PUT = on
+  conserve l'existant** (l'utilisateur ne re-saisit pas les étoiles), tandis
+  que mot de passe vide sans identifiants préalables = 422. Jamais de mot de
+  passe dans les logs non plus. (3) **Badge broker rendu cliquable** dans
+  `charts.js` (le header est le seul endroit qui nomme déjà le broker) +
+  clé 🔑 quand configuré ; modale en Tailwind pur dans `dashboard.html`
+  (zéro nouvelle lib). (4) `broker_credentials_set` ajouté à `/api/status`.
+  (5) **Câblage futur préparé** : `InteractiveBrokersGateway.connect()`
+  lira `broker_credentials.password` (host/port/client_id restent en
+  config) — noté dans le code. Conséquences traitées : docs/architecture.md
+  (arbo brokers + endpoints), pas de changement config/.gitignore (rien de
+  persisté). Validé au navigateur (Playwright) : ouverture, enregistrement,
+  clé sur le badge, réouverture avec étoiles + identifiant prérempli +
+  bouton Effacer, zéro erreur console. 11 tests ajoutés (store + API,
+  dont fuite du mot de passe vérifiée), **92 verts**.
 
 - **2026-07-20** — Passe d'ergonomie du dashboard live, en s'inspirant des
   terminaux existants (TradingView / MetaTrader 5). Constat : la page Live
