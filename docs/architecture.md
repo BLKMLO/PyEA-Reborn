@@ -52,17 +52,19 @@ PyEA-Reborn/
 │   ├── brokers/
 │   │   ├── broker_gateway.py              # Contrat générique BrokerGateway + registre.
 │   │   ├── broker_credentials.py          # Identifiants broker saisis au runtime, gardés EN MÉMOIRE (jamais sur disque).
+│   │   ├── broker_runtime.py              # Gateway active + état de connexion RÉEL (singleton, lu par l'API).
 │   │   └── broker_interactive_brokers.py  # 1re implémentation (ib_async). Suivant : broker_<nom>.py.
 │   │
 │   ├── storage/
 │   │   ├── storage_models.py              # Modèles SQLAlchemy (signals, trades, états, runs).
 │   │   ├── storage_database.py            # Moteur/sessions ; SQLite → Postgres via database_url.
 │   │   ├── storage_trading_state.py       # Interrupteur Trading/Stopped par symbole (persisté).
+│   │   ├── storage_trades.py              # Journal SQL des trades exécutés (affichage réel, jamais simulé).
 │   │   └── storage_training_runs.py       # Historique des entraînements (métriques OOS, artefacts).
 │   │
 │   ├── api/
 │   │   ├── api_pages.py                   # Pages HTML : / (live), /backtest, /training (Jinja2 + HTMX).
-│   │   ├── api_rest.py                    # REST : status, broker/credentials, symbols, trading/{symbol}, positions, logs, charts.
+│   │   ├── api_rest.py                    # REST : status, broker/{credentials,connect,disconnect}, symbols, trading, positions, logs, charts.
 │   │   ├── api_backtest.py                # REST : /api/backtest/datasets et /api/backtest/run.
 │   │   ├── api_training.py                # REST : /api/training/run, current-job, jobs/{id}, runs, definition/{strategy}.
 │   │   └── api_websocket.py               # WebSocket /ws : relais du bus vers les navigateurs.
@@ -72,6 +74,7 @@ PyEA-Reborn/
 │       │                                  # dashboard.html, backtest.html (run unique), training.html.
 │       └── static/
 │           ├── js/charts.js               # Logique du dashboard live (graphique, watchlist, positions).
+│           ├── js/toasts.js               # Notifications toast (feedback des actions), chargé partout.
 │           ├── js/backtest.js             # Page backtest : formulaire, équité, trades (run unique).
 │           ├── js/training.js             # Page entraînement : walk-forward, équité OOS, plis, définition.
 │           └── vendor/                    # Tailwind, HTMX, Lightweight Charts (chandeliers),
@@ -95,6 +98,11 @@ PyEA-Reborn/
    ne s'instancient pas entre eux.
 5. **Config centralisée** : tout passe par `get_settings()` — aucune
    lecture directe d'`os.environ` ou du YAML ailleurs.
+6. **L'interface ne ment pas** : les données de COMPTE (positions, trades,
+   P&L, état de connexion) viennent TOUJOURS du broker ou du journal SQL,
+   jamais d'une simulation — vides si le broker est déconnecté. Seules les
+   données de MARCHÉ peuvent être une démo tant que le flux réel n'est pas
+   branché, et l'UI l'affiche explicitement (« DÉMO »).
 
 ## Conventions de nommage
 

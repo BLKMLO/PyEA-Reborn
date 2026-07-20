@@ -2,26 +2,31 @@
 
 Le temps réel passe par api_websocket.py, jamais par ici.
 
-NOTE données factices : tant que la gateway broker n'est pas câblée,
-/api/charts/price-history et /api/positions servent des données de
-démonstration DÉTERMINISTES (seed = symbole + minute) — la série est
-stable d'un rafraîchissement à l'autre et la dernière bougie « vit ».
-Le branchement réel remplacera uniquement les fonctions _demo_*.
+HONNÊTETÉ DE L'INTERFACE (règle utilisateur) : PyEA ne fabrique JAMAIS de
+données de COMPTE (positions, trades, P&L, état de connexion). Elles
+viennent du broker (gateway) ou du journal SQL des trades ; tant que le
+broker est déconnecté, l'interface montre « déconnecté », zéro position,
+zéro trade. Seules les données de MARCHÉ (graphique, prix watchlist)
+restent une DÉMO déterministe tant que le flux réel n'est pas branché —
+et le dashboard l'affiche explicitement comme « DÉMO » (`market_data_live`
+dans /api/status). Le câblage réel remplacera les fonctions _demo_*.
 """
 
 from __future__ import annotations
 
 import random
 import zlib
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from pyea.brokers.broker_credentials import broker_credentials
+from pyea.brokers.broker_runtime import broker_runtime
 from pyea.config.config_settings import get_settings
 from pyea.core.core_logging import get_logger, web_log_buffer
+from pyea.storage.storage_trades import list_recent_trades
 from pyea.storage.storage_trading_state import (
     get_trading_states,
     is_trading_enabled,
@@ -31,6 +36,10 @@ from pyea.strategies.strategy_registry import list_strategies
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/api", tags=["api"])
+
+# Les données de marché sont-elles réelles ? False tant que le flux broker
+# n'est pas câblé (le graphique/watchlist affichent alors une démo étiquetée).
+MARKET_DATA_LIVE = False
 
 
 def _require_known_symbol(symbol: str) -> None:
@@ -46,13 +55,41 @@ async def get_status() -> dict[str, Any]:
         "app_version": "0.1.0",
         "trading_mode": settings.trading_mode,
         "broker": settings.broker_name,
-        "broker_connected": False,  # Branché sur la gateway réelle plus tard.
+        "broker_connected": broker_runtime.is_connected(),  # état RÉEL de la gateway
         "broker_credentials_set": broker_credentials.is_configured(),
+        "market_data_live": MARKET_DATA_LIVE,  # False → l'UI marque « DÉMO »
         "strategy": settings.strategy_name,
         "strategy_enabled": settings.strategy_enabled,
         "available_strategies": list_strategies(),
         "chart_refresh_seconds": settings.ui_chart_refresh_seconds,
     }
+
+
+@router.post("/broker/connect")
+async def connect_broker() -> dict[str, Any]:
+    """Tente la connexion au broker. Retour HONNÊTE : tant que la gateway IB
+    réelle n'est pas implémentée, renvoie 501 (pas de fausse connexion)."""
+    try:
+        await broker_runtime.connect()
+    except NotImplementedError:
+        raise HTTPException(
+            status_code=501,
+            detail="Connexion au broker indisponible : la passerelle IB est "
+            "encore en développement (aucune fausse connexion n'est simulée).",
+        )
+    except Exception as exc:  # échec réel (TWS éteint, identifiants…)
+        logger.warning("Connexion broker échouée : %s", exc)
+        raise HTTPException(status_code=502, detail=f"Connexion au broker échouée : {exc}")
+    logger.info("Connexion au broker établie.")
+    return {"broker_connected": broker_runtime.is_connected()}
+
+
+@router.post("/broker/disconnect")
+async def disconnect_broker() -> dict[str, Any]:
+    """Coupe la connexion au broker (toujours autorisé)."""
+    await broker_runtime.disconnect()
+    logger.info("Déconnexion du broker.")
+    return {"broker_connected": broker_runtime.is_connected()}
 
 
 # --- Identifiants broker (saisis au runtime, gardés en mémoire) ---
@@ -156,8 +193,17 @@ async def get_trading_state(symbol: str) -> dict[str, Any]:
 
 @router.put("/trading/{symbol}")
 async def put_trading_state(symbol: str, toggle: TradingToggle) -> dict[str, Any]:
-    """Arme (Trading) ou arrête (Stopped) le trading d'une paire."""
+    """Arme (Trading) ou arrête (Stopped) le trading d'une paire.
+
+    ARMER exige un broker CONNECTÉ : sans ça, armer ne ferait que produire
+    l'illusion de trades. Arrêter est toujours autorisé (sécurité)."""
     _require_known_symbol(symbol)
+    if toggle.enabled and not broker_runtime.is_connected():
+        raise HTTPException(
+            status_code=409,
+            detail="Broker déconnecté : connectez-vous au broker avant d'armer "
+            "une paire. (Pour des trades fictifs, utilisez un compte démo IB.)",
+        )
     enabled = set_trading_enabled(symbol, toggle.enabled)
     logger.info("Trading %s : %s", symbol, "ARMÉ" if enabled else "ARRÊTÉ")
     return {"symbol": symbol, "enabled": enabled}
@@ -274,65 +320,33 @@ async def get_price_history(
     return {"symbol": symbol, "candles": candles, "has_more": has_more}
 
 
-def _demo_positions(settings: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Positions de démonstration : paires armées, sinon têtes de watchlist."""
-    armed = [symbol for symbol, on in get_trading_states().items() if on]
-    demo_symbols = (armed or settings.history_instruments)[:3]
-    now = datetime.now(timezone.utc)
-    now_minute = int(now.timestamp() // 60)
-    open_positions = []
-    for i, symbol in enumerate(demo_symbols):
-        rng = random.Random(f"open:{symbol}")
-        entry = _base_price(symbol)
-        current = _demo_candles(symbol, now_minute, 1)[-1]["close"]
-        quantity = rng.choice([0.5, 1.0, 2.0])
-        side = rng.choice(["BUY", "SELL"])
-        direction = 1 if side == "BUY" else -1
-        open_positions.append(
-            {
-                "symbol": symbol,
-                "side": side,
-                "quantity": quantity,
-                "entry_price": round(entry, 5),
-                "current_price": current,
-                "pnl": round((current - entry) * direction * quantity * 100, 2),
-                "opened_at": (now - timedelta(hours=2 + i)).isoformat(),
-            }
-        )
-    closed_positions = []
-    for i in range(5):
-        symbol = demo_symbols[i % len(demo_symbols)]
-        rng = random.Random(f"closed:{symbol}:{i}")
-        entry = _base_price(symbol)
-        exit_ = entry * (1 + rng.uniform(-0.004, 0.006))
-        quantity = rng.choice([0.5, 1.0, 2.0])
-        side = rng.choice(["BUY", "SELL"])
-        direction = 1 if side == "BUY" else -1
-        closed_positions.append(
-            {
-                "symbol": symbol,
-                "side": side,
-                "quantity": quantity,
-                "entry_price": round(entry, 5),
-                "close_price": round(exit_, 5),
-                "pnl": round((exit_ - entry) * direction * quantity * 100, 2),
-                "opened_at": (now - timedelta(days=i + 1, hours=3)).isoformat(),
-                "closed_at": (now - timedelta(days=i + 1)).isoformat(),
-            }
-        )
-    return open_positions, closed_positions
-
-
 @router.get("/positions")
 async def get_positions() -> dict[str, Any]:
-    """Positions ouvertes + fermées (récentes d'abord) + P&L total (démo)."""
-    settings = get_settings()
-    open_positions, closed_positions = _demo_positions(settings)
-    total_pnl = round(
-        sum(p["pnl"] for p in open_positions) + sum(p["pnl"] for p in closed_positions), 2
-    )
+    """Positions ouvertes (broker) + trades exécutés (journal SQL) + P&L.
+
+    RIEN n'est simulé ici : les positions ouvertes viennent de la gateway
+    (uniquement si connectée), les trades exécutés du journal SQL. Broker
+    déconnecté → listes vides, P&L 0 — l'interface ne ment pas.
+    """
+    open_positions: list[dict[str, Any]] = []
+    gateway = broker_runtime.gateway
+    if broker_runtime.is_connected() and gateway is not None:
+        for position in await gateway.get_positions():
+            open_positions.append(
+                {
+                    "symbol": position.symbol,
+                    "side": "BUY" if position.quantity >= 0 else "SELL",
+                    "quantity": abs(position.quantity),
+                    "entry_price": position.average_price,
+                    "current_price": None,
+                    "pnl": position.unrealized_pnl,
+                }
+            )
+    executed_trades = list_recent_trades()  # journal réel (vide sans broker)
+    open_pnl = sum(p["pnl"] or 0 for p in open_positions)
     return {
+        "broker_connected": broker_runtime.is_connected(),
         "open": open_positions,
-        "closed": closed_positions,  # déjà triées : plus récentes en premier
-        "total_pnl": total_pnl,
+        "trades": executed_trades,  # plus récents d'abord
+        "total_pnl": round(open_pnl, 2),
     }

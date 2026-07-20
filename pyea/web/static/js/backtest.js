@@ -62,9 +62,11 @@ async function runBacktest() {
   const message = document.getElementById("bt-message");
   button.disabled = true;
   message.textContent = "Backtest en cours…";
+  const symbol = document.getElementById("bt-symbol").value;
+  showToast(`Backtest ${symbol} lancé…`, "info");
   try {
     const body = {
-      symbol: document.getElementById("bt-symbol").value,
+      symbol,
       timeframe: document.getElementById("bt-timeframe").value,
       strategy: document.getElementById("bt-strategy").value,
     };
@@ -79,13 +81,18 @@ async function runBacktest() {
       body: JSON.stringify(body),
     });
     if (!response.ok) {
-      message.textContent = `Erreur : ${apiErrorText(await response.json())}`;
+      const detail = apiErrorText(await response.json());
+      message.textContent = `Erreur : ${detail}`;
+      showToast(`Backtest échoué : ${detail}`, "error");
       return;
     }
-    renderResults(await response.json());
+    const result = await response.json();
+    renderResults(result);
     message.textContent = "";
+    showToast(`Backtest terminé : ${result.stats.trades} trade(s).`, "success");
   } catch (error) {
     message.textContent = `Erreur réseau : ${error.message}`;
+    showToast(`Erreur réseau : ${error.message}`, "error");
   } finally {
     button.disabled = false;
   }

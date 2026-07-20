@@ -62,11 +62,12 @@
           <thead class="sticky top-0 bg-slate-800 text-slate-400">
             <tr>
               <th class="py-1 pr-2">Symbole</th><th class="pr-2">Sens</th><th class="pr-2">Qté</th>
-              <th class="pr-2">Entrée</th><th class="pr-2">Prix</th><th class="pr-2">P&L</th><th>Statut</th>
+              <th class="pr-2">Entrée / Fill</th><th class="pr-2">Prix</th><th class="pr-2">P&L</th><th>Statut</th>
             </tr>
           </thead>
           <tbody id="positions-body"></tbody>
         </table>
+        <p id="positions-empty" class="hidden py-3 text-center text-xs text-slate-500"></p>
       </div>
       <div id="tab-logs" class="hidden min-h-0 flex-1 overflow-y-auto px-3 py-2">
         <pre id="log-lines" class="text-[11px] leading-relaxed text-slate-400"></pre>
@@ -117,6 +118,15 @@
             <button type="submit"
                     class="rounded bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-500">Enregistrer</button>
           </div>
+        </div>
+        <div class="border-t border-slate-700 pt-3">
+          <button type="button" id="broker-connect"
+                  class="w-full rounded bg-sky-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-600">
+            Se connecter au broker
+          </button>
+          <p class="mt-1 text-[11px] text-slate-500">
+            État actuel : <span id="broker-connection-state" class="font-semibold">—</span>
+          </p>
         </div>
       </form>
     </div>

@@ -1,10 +1,13 @@
 """Tests fumée de l'API : l'app démarre et les endpoints clés répondent."""
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
 from pyea.app_factory import create_app
 from pyea.brokers.broker_credentials import broker_credentials
+from pyea.config.config_settings import get_settings
 
 
 def _client() -> TestClient:
@@ -12,11 +15,16 @@ def _client() -> TestClient:
 
 
 @pytest.fixture(autouse=True)
-def _reset_broker_credentials():
-    """Le store d'identifiants est un singleton de module : on l'isole
-    entre tests pour éviter toute fuite d'état."""
+def _isolate_state(tmp_path: Path):
+    """Isole l'état partagé entre tests : identifiants broker (singleton) et
+    base SQLite (une base temporaire par test → journal des trades vierge,
+    pas de fuite d'un test à l'autre)."""
     broker_credentials.clear()
+    settings = get_settings()
+    original_url = settings.database_url
+    settings.database_url = f"sqlite:///{tmp_path}/test.db"
     yield
+    settings.database_url = original_url
     broker_credentials.clear()
 
 
@@ -82,26 +90,28 @@ def test_symbols_prix_coherent_avec_le_graphique() -> None:
     assert last in {candles[-1]["close"], candles[-2]["close"]}
 
 
-def test_trading_toggle_et_verification_au_changement_d_onglet() -> None:
+def test_armer_sans_broker_refuse() -> None:
+    # Honnêteté : sans broker connecté, armer une paire est REFUSÉ (409) —
+    # pas de faux trades. Le broker n'est jamais connecté dans les tests.
     with _client() as client:
-        try:
-            # Armement de la paire (bouton → Trading).
-            put = client.put("/api/trading/EURCHF", json={"enabled": True})
-            assert put.status_code == 200 and put.json()["enabled"] is True
-            # Vérification faite à chaque changement d'onglet.
-            get = client.get("/api/trading/EURCHF")
-            assert get.json() == {"symbol": "EURCHF", "enabled": True}
-            # La pastille de la watchlist suit le même état.
-            symbols = client.get("/api/symbols").json()["symbols"]
-            assert next(s for s in symbols if s["symbol"] == "EURCHF")["trading"] is True
-        finally:
-            client.put("/api/trading/EURCHF", json={"enabled": False})
+        put = client.put("/api/trading/EURCHF", json={"enabled": True})
+        assert put.status_code == 409
+        assert "déconnecté" in put.json()["detail"].lower()
+        # L'état reste « arrêté » (rien n'a été armé en douce).
+        assert client.get("/api/trading/EURCHF").json()["enabled"] is False
+
+
+def test_desarmer_toujours_autorise() -> None:
+    # Arrêter une paire doit toujours marcher (sécurité), broker ou pas.
+    with _client() as client:
+        put = client.put("/api/trading/EURCHF", json={"enabled": False})
+        assert put.status_code == 200 and put.json()["enabled"] is False
 
 
 def test_trading_symbole_inconnu_404() -> None:
     with _client() as client:
         assert client.get("/api/trading/NIMPORTE").status_code == 404
-        assert client.put("/api/trading/NIMPORTE", json={"enabled": True}).status_code == 404
+        assert client.put("/api/trading/NIMPORTE", json={"enabled": False}).status_code == 404
 
 
 def test_price_history_bougies_ohlc() -> None:
@@ -213,13 +223,43 @@ def test_broker_credentials_suppression() -> None:
         assert client.get("/api/broker/credentials").json()["configured"] is False
 
 
-def test_positions_structure_et_pnl_total() -> None:
+def test_positions_vides_sans_broker() -> None:
+    # Broker déconnecté (cas des tests) : AUCUNE position ni trade simulé,
+    # P&L à zéro. L'interface ne ment pas.
     with _client() as client:
-        response = client.get("/api/positions")
-    data = response.json()
-    assert response.status_code == 200
-    assert {"open", "closed", "total_pnl"} <= set(data)
-    if data["closed"]:
-        # Plus récentes en premier.
-        closed_dates = [p["closed_at"] for p in data["closed"]]
-        assert closed_dates == sorted(closed_dates, reverse=True)
+        data = client.get("/api/positions").json()
+    assert data["broker_connected"] is False
+    assert data["open"] == []
+    assert data["trades"] == []
+    assert data["total_pnl"] == 0
+
+
+def test_status_broker_deconnecte_et_marche_demo() -> None:
+    with _client() as client:
+        status = client.get("/api/status").json()
+    # État broker RÉEL (gateway non connectée), pas un booléen codé en dur.
+    assert status["broker_connected"] is False
+    # Données de marché signalées comme démo → l'UI affiche le badge « DÉMO ».
+    assert status["market_data_live"] is False
+
+
+def test_connexion_broker_retour_honnete() -> None:
+    # La connexion IB n'est pas implémentée : réponse 501 explicite, JAMAIS
+    # une fausse connexion réussie.
+    with _client() as client:
+        response = client.post("/api/broker/connect")
+        assert response.status_code == 501
+        assert client.get("/api/status").json()["broker_connected"] is False
+
+
+def test_trades_affiches_viennent_du_journal_sql() -> None:
+    # L'affichage lit le journal SQL (réel), pas une invention en mémoire.
+    from pyea.storage.storage_database import init_db
+    from pyea.storage.storage_trades import record_trade
+
+    with _client() as client:
+        init_db()
+        record_trade("ORD-1", "EURUSD", "BUY", 1.0, 1.0855, status="FILLED")
+        data = client.get("/api/positions").json()
+    assert any(t["broker_order_id"] == "ORD-1" and t["symbol"] == "EURUSD"
+               for t in data["trades"])

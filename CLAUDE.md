@@ -263,15 +263,45 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
    injectés par `create_app()` (incohérent avec `MarketDataFeed` qui
    reçoit son bus). Si les tests exigent un jour des bus isolés, les
    faire passer par `app_factory`.
-2. `/api/status` code en dur `broker_connected: False` — le vrai câblage
-   devra exposer la gateway via `app.state`, jamais par import direct
-   dans `api_rest`.
+2. ~~`/api/status` code en dur `broker_connected: False`~~ **RÉSOLU
+   (2026-07-20)** : gateway instanciée dans le `lifespan`, exposée par le
+   singleton `broker_runtime` ; `/api/status` lit `is_connected()` réel.
 3. Le `lifespan` de `app_factory` ne monte pas encore gateway + stratégie
    + feed : c'est au premier câblage complet que le flux
    `Signal → RiskManager → OrderRequest` devra être imposé (aucun
    raccourci stratégie→broker, même « pour tester »).
 
 ## Journal de décisions
+
+- **2026-07-20** — **Passe « honnêteté de l'interface »** (demande
+  utilisateur après usage réel : « je ne veux pas de mensonges dans mon
+  interface »). Principe posé : **PyEA ne fabrique JAMAIS de données de
+  COMPTE** (positions, trades, P&L, état de connexion) — elles viennent du
+  broker (gateway) ou du journal SQL. Seules les données de MARCHÉ
+  (graphique, prix watchlist) restent une démo, mais **étiquetée « DÉMO »**
+  (badge violet dans le header, `market_data_live: false` dans
+  `/api/status`). Livré : (1) **Toasts** (`static/js/toasts.js`, chargé
+  partout via base.html) sur connexion broker, backtest, entraînement,
+  armement de paire, erreurs. (2) **Bouton Trading désactivé si broker
+  déconnecté** (grisé + title explicatif) ; `PUT /api/trading/{symbol}`
+  **refuse d'armer** (409) sans broker connecté — désarmer reste toujours
+  permis. **`_demo_positions` SUPPRIMÉ** (c'était la source des « faux
+  trades »). (3) **État broker RÉEL** : gateway instanciée dans le
+  `lifespan` et exposée via `broker_runtime` (singleton, résout le point
+  de vigilance n°2) ; `/api/status.broker_connected` reflète
+  `gateway.is_connected()` (déconnecté tant qu'IB n'est pas câblé, jamais
+  codé en dur). `POST /api/broker/connect` tente la vraie connexion →
+  **501 honnête** tant qu'IB n'est pas implémenté (aucune fausse
+  connexion). (4) **Trades affichés = journal SQL** (`storage_trades.py`,
+  table `trades` existante) : `record_trade`/`list_recent_trades` ;
+  `/api/positions` sert positions ouvertes (gateway) + trades exécutés
+  (SQL) + `broker_connected` — vide et honnête sans broker. (5) **Symboles
+  non affichés non rafraîchis** : confirmé — seul `state.activeSymbol` a
+  son graphique en mémoire (`state.candles` vidé au changement d'onglet)
+  et rafraîchi par tick ; la watchlist ne fait qu'un fetch de prix à la
+  demande (rien maintenu en mémoire par symbole). Validé au navigateur
+  (bouton grisé, positions « broker déconnecté », badge DÉMO, toast de
+  connexion honnête). 110 tests verts.
 
 - **2026-07-20** — **Passe « utilisateur maladroit »** (demande
   explicite : sécuriser contre les erreurs d'usage, hors attaque
@@ -436,6 +466,10 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
   chartjs-chart-financial (chandeliers). Les logs restent accessibles
   (onglet du panneau bas). Tout le factice est concentré dans les
   fonctions `_demo_*` d'`api_rest.py`, à remplacer au câblage réel.
+  **Positions/trades/P&L ne sont JAMAIS simulés** : positions ouvertes =
+  gateway (si connectée), trades exécutés = journal SQL (`storage_trades`),
+  P&L réel — vide si broker déconnecté. Seul le marché (graphique,
+  watchlist) reste démo, signalé « DÉMO ».
 - **2026-07-18** — Graphique de prix migré de Chart.js+chartjs-chart-financial
   vers **TradingView Lightweight Charts 4.2.0** (vendorisé), suite à la
   demande « remonter le graphique dans le passé ». Raisonnement : le
