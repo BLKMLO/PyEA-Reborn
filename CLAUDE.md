@@ -322,10 +322,9 @@ jamais commité — modèle dans `.env.example`).
   (`NotImplementedError`) est journalisé honnêtement, sans crash ni ordre
   simulé. Testé de bout en bout avec un faux broker (10 tests : relais de
   ticks, gating armé/connecté/kill-switch, ordre non routé sans fill,
-  consommation via le bus). **Couleuvre en live reste muette** tant que la
-  sélection de modèle live n'est pas câblée (son `on_tick` est indexé par
-  bougie — inférence live tick→bougie = suite) : montage warmup `{}` → aucun
-  ordre, honnête. Une stratégie non-ML traderait normalement à travers ce flux.
+  consommation via le bus). *(À l'étape backbone, Couleuvre restait muette en
+  live faute de sélection de modèle ; l'inférence live tick→bougie a depuis été
+  livrée — cf. bullet dédié plus bas.)*
 - **MetaTrader 5 COMPLET (routage d'ordres + flux de prix livrés)** — comme IB
   désormais. `place_order` = ordre au marché `TRADE_ACTION_DEAL` avec **SL/TP
   attachés NATIVEMENT à la position** (MT5 les rattache, l'un annule l'autre =
@@ -346,9 +345,29 @@ jamais commité — modèle dans `.env.example`).
   connecté), comme IB. Tests : 4 ajoutés (place_order DEAL + SL/TP + normalisation,
   flux scrutation relaie/dédoublonne via faux module MT5, ordre + flux refusés
   hors connexion).
-- **Squelette restant** : **inférence live de Couleuvre** (agrégation tick→bougie
-  + sélection du modèle par actif) — à concevoir. Les DEUX brokers (IB + MT5)
-  sont désormais COMPLETS côté câblage (cycle de vie, compte, ordres, flux).
+- **Inférence live de Couleuvre LIVRÉE** (agrégation tick→bougie + sélection
+  du modèle par actif) — le flux live est désormais complet de bout en bout.
+  `pyea/live/live_candles.py` (`CandleAggregator` : accumule les ticks en
+  bougies OHLCV alignées sur la grille du timeframe via `Timestamp.floor`, émet
+  la bougie CLOSE au passage de bucket = décision strictement causale ; M1→D1,
+  W1/MN1 refusés — hors swing intra-semaine). `pyea/live/live_models.py`
+  (`resolve_live_model` : dernier run **`completed`** de la paire → modèle du
+  **dernier pli** = plus de données, via `latest_completed_run` en base). **Mode
+  live de `CouleuvreV01`** : `warmup(live=True)` monte l'agrégateur (timeframe
+  du modèle) + un tampon glissant amorcé par l'historique local récent, `on_tick`
+  recalcule les features causales sur le tampon À CHAQUE bougie close et décide
+  (mêmes seuils/barrières que le backtest) ; le chemin backtest (lookup de proba
+  pré-calculée par bougie) reste **inchangé** (branche séparée sur `self._live`).
+  `LiveRuntime._warmup_for(symbol)` fournit modèle+historique par symbole au
+  moteur (nouveau `warmup_provider` du `LiveTradingEngine`) ; **aucun modèle
+  entraîné → `{}` → paire non tradée** (honnête). **Équivalence live/backtest
+  prouvée à ~99,5 %** (test sur frame close-only, un tick par bougie) — le
+  résiduel vient des indicateurs récursifs (EMA/Wilder) qui dépendent d'un
+  historique plus long que le tampon glissant (attendu, pas une fuite).
+  **Non bit-à-bit** et **1er run réel à valider chez l'utilisateur** : les ticks
+  live sont un mid, pas l'OHLC bid/ask enregistré. **Plus de squelette côté
+  live** : cycle de vie, compte, ordres, flux ET inférence ML sont câblés
+  (IB + MT5).
 
 ## Points de vigilance (audit modularité 2026-07-18)
 
@@ -368,10 +387,56 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
    (feed + `LiveTradingEngine`), démarré à la connexion broker. Le flux
    strict `Strategy → Signal → RiskManager → OrderRequest → BrokerGateway`
    est imposé en live comme en backtest (aucun raccourci stratégie→broker).
-   Feuilles broker (order routing + flux de prix) désormais câblées pour IB
-   ET MT5. Reste à câbler : l'inférence live de Couleuvre.
+   Feuilles broker (order routing + flux de prix) câblées pour IB ET MT5,
+   **et l'inférence live de Couleuvre est livrée** (agrégation tick→bougie +
+   sélection du modèle par actif) : le flux live est complet de bout en bout.
 
 ## Journal de décisions
+
+- **2026-07-21** — **Câblage live, étape 5 : inférence live de Couleuvre**
+  (demande utilisateur « go pour l'inférence live »). Dernière brique du flux
+  live. Le problème : le `on_tick` de Couleuvre était **indexé par bougie**
+  (`self._proba.at[tick.timestamp]`), conçu pour le backtest où chaque tick EST
+  une clôture de bougie ; en live, les ticks arrivent en continu → il faut les
+  **agréger en bougies** puis recalculer les features. Décisions et
+  conséquences : (1) **Agrégation dans un composant réutilisable**
+  (`live_candles.CandleAggregator`), PAS dans le moteur : buckets alignés sur la
+  MÊME grille que `resample_history` (`Timestamp.floor(freq)`, réutilise
+  `_TIMEFRAME_RULES`), bougie émise au **passage de bucket** (décision juste
+  après la clôture = strictement causal). W1/MN1 refusés (floor sans origine
+  fixe ; hors swing intra-semaine de Couleuvre). (2) **Agrégation DANS la
+  stratégie** (via l'agrégateur), pas dans `LiveTradingEngine` : le contrat
+  `on_tick(TickData)→Signal|None` suffit (la plupart des ticks → None, décision
+  à la clôture), le moteur reste générique. (3) **Deux modes exclusifs dans
+  `CouleuvreV01`**, branche sur `self._live` : backtest (lookup de proba
+  pré-calculée — **inchangé**, aucune régression) vs live (`warmup(live=True)`
+  monte l'agrégateur + tampon glissant `_LIVE_BUFFER_BARS=400` amorcé par
+  l'historique récent ; `on_tick` recalcule `compute_features` sur le tampon à
+  chaque bougie close, lit la dernière ligne, décide avec les MÊMES seuils/
+  barrières). (4) **Sélection du modèle par actif** (`live_models.resolve_live_model`
+  + `latest_completed_run` en base) : dernier run `completed` de la paire →
+  modèle du **dernier pli** (plus grande fenêtre expansive = plus de données) ;
+  le walk-forward VALIDE mais entraîne un modèle par pli, pas de ré-entraînement
+  final dédié → le dernier pli est le modèle « le plus mûr » dispo (piste
+  d'amélioration notée). Aucun run réussi → None → paire muette. (5)
+  **`LiveTradingEngine.start` prend un `warmup_provider(symbol)→params`**
+  (remplace le `warmup_params` unique) : `LiveRuntime._warmup_for` résout
+  modèle + charge l'historique local récent (fenêtre 400 j, fallback tout
+  l'historique, best-effort — absence d'historique n'empêche pas le live, le
+  tampon se remplira des bougies live) par symbole. Pas de modèle → `{}` →
+  muette (honnête, jamais un trade sans modèle). (6) **Équivalence live/backtest
+  prouvée ~99,5 %** (test sur frame close-only + un tick/bougie → features
+  identiques) ; le résiduel (~0,5 % de flips de frontière) vient des indicateurs
+  RÉCURSIFS (EMA/Wilder) qui dépendent d'un historique plus long que le tampon
+  glissant — écart ATTENDU, démontré non-fuite, PAS bit-à-bit (assumé et
+  documenté ; les ticks live sont de toute façon un mid, pas l'OHLC bid/ask
+  enregistré → 1er run réel à valider chez l'utilisateur, comme les brokers).
+  (7) **Tests** : 12 ajoutés (agrégateur : buckets/OHLCV/refus W1 ; sélection
+  modèle : dernier pli, saut de pli sans modèle, run non réussi ignoré, plus
+  récent gagne ; Couleuvre live : équivalence backtest ≥98 %, muette sans
+  modèle ; moteur : `warmup_provider` par symbole). `docs/architecture.md`
+  (arbo `live/` + `live_candles`/`live_models`) et ce fichier mis à jour.
+  **141 verts.** Le flux live est COMPLET de bout en bout (brokers + inférence).
 
 - **2026-07-21** — **Câblage live, étape 4 : MetaTrader 5 COMPLET** (demande
   utilisateur « finis metatrader d'abord »). Après IB (étape 3), on câble les

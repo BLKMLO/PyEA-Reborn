@@ -39,6 +39,9 @@ logger = get_logger(__name__)
 StrategyFactory = Callable[[], Strategy]
 #: Fournit la gateway si (et seulement si) le broker est connecté, sinon None.
 GatewayProvider = Callable[[], BrokerGateway | None]
+#: Paramètres de ``warmup`` PROPRES à un symbole (modèle, timeframe, historique
+#: de chauffe) — un modèle par actif. Défaut ``{}`` = stratégie non entraînée.
+WarmupProvider = Callable[[str], dict[str, Any]]
 
 
 class LiveTradingEngine:
@@ -63,13 +66,18 @@ class LiveTradingEngine:
         self._handler: Callable[[dict[str, Any]], Awaitable[None]] | None = None
 
     async def start(
-        self, symbols: list[str], warmup_params: dict[str, Any] | None = None
+        self, symbols: list[str], warmup_provider: WarmupProvider | None = None
     ) -> None:
-        """Instancie + chauffe une stratégie par symbole, puis écoute le bus."""
-        params = warmup_params or {}
+        """Instancie + chauffe une stratégie PAR symbole, puis écoute le bus.
+
+        ``warmup_provider(symbol)`` fournit les paramètres de chauffe propres au
+        symbole (modèle/timeframe/historique — un modèle par actif). Défaut :
+        aucun paramètre (``{}``) → une stratégie ML reste muette, honnêtement.
+        """
+        provider = warmup_provider or (lambda _symbol: {})
         for symbol in symbols:
             strategy = self._strategy_factory()
-            await strategy.warmup({**params, "symbol": symbol})
+            await strategy.warmup({**provider(symbol), "symbol": symbol})
             self._strategies[symbol] = strategy
         self._handler = self._on_tick_event
         self._bus.subscribe(TOPIC_TICK, self._handler)

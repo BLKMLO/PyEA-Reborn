@@ -33,8 +33,10 @@ PyEA-Reborn/
 │   │   ├── live_engine.py                 # Flux strict en temps réel : bus (ticks) → Strategy →
 │   │   │                                  # Signal → RiskManager → OrderRequest → BrokerGateway.
 │   │   │                                  # Ne trade que si armé + connecté + kill-switch ON.
-│   │   └── live_runtime.py                # Singleton : assemble feed + moteur, démarré/arrêté
-│   │                                      # avec la connexion broker (câblé par app_factory).
+│   │   ├── live_candles.py                # Agrégateur tick→bougie (OHLCV) aligné sur le timeframe.
+│   │   ├── live_models.py                 # Sélection du modèle live par actif (dernier run réussi).
+│   │   └── live_runtime.py                # Singleton : assemble feed + moteur, warmup par symbole
+│   │                                      # (modèle + historique), démarré/arrêté à la connexion broker.
 │   │
 │   ├── strategies/
 │   │   ├── strategy_base.py               # Contrat abstrait Strategy (warmup / on_tick / shutdown / train).

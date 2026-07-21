@@ -102,6 +102,68 @@ def test_pas_de_fuite_pnl_nul_sur_bruit() -> None:
     assert 0.40 <= stats["win_rate"] <= 0.60
 
 
+def _close_only(n: int, seed: int) -> pd.DataFrame:
+    """Frame sans high/low (high=low=close via fallback) : une bougie se
+    reconstruit alors EXACTEMENT à partir d'un seul tick au close — condition
+    pour comparer inférence live et lookup backtest sur les mêmes features."""
+    rng = np.random.default_rng(seed)
+    index = pd.date_range("2022-01-03", periods=n, freq="1h", tz="UTC")
+    close = 1.10 + rng.normal(0, 0.0006, n).cumsum()
+    volume = rng.integers(50, 500, n).astype(float)
+    return pd.DataFrame({"bid_close": close, "volume": volume}, index=index)
+
+
+def test_live_inference_equivaut_au_backtest(tmp_path) -> None:
+    """L'inférence live (agrégation tick→bougie + recalcul glissant) reproduit
+    la décision du backtest (proba pré-calculée par bougie), à quelques flips
+    de frontière près (les indicateurs récursifs dépendent d'un historique plus
+    long que le tampon glissant — écart attendu, pas une fuite)."""
+    frame = _close_only(4000, seed=11)
+    train, live_frame = frame.iloc[:2000], frame.iloc[2000:]
+
+    strat_bt = CouleuvreV01()
+    report = asyncio.run(strat_bt.train(train, {"fold": 1, "model_dir": str(tmp_path)}))
+    model_path = report["model_path"]
+
+    # Backtest : décision par lookup de la proba pré-calculée.
+    asyncio.run(strat_bt.warmup({"symbol": "T", "timeframe": "H1", "frame": live_frame}))
+    bt: dict = {}
+    for ts, row in live_frame.iterrows():
+        sig = asyncio.run(strat_bt.on_tick(
+            TickData(symbol="T", price=float(row["bid_close"]), timestamp=ts)))
+        bt[ts] = None if sig is None else sig.action.value
+
+    # Live : un tick par bougie ; la décision sort à la CLÔTURE (tick suivant).
+    strat_lv = CouleuvreV01()
+    asyncio.run(strat_lv.warmup(
+        {"symbol": "T", "live": True, "timeframe": "H1", "model_path": model_path}))
+    rows = list(live_frame.iterrows())
+    lv: dict = {}
+    for i, (ts, row) in enumerate(rows):
+        sig = asyncio.run(strat_lv.on_tick(TickData(
+            symbol="T", price=float(row["bid_close"]),
+            volume=float(row["volume"]), timestamp=ts)))
+        if i > 0:  # ce tick clôt la bougie précédente
+            lv[rows[i - 1][0]] = None if sig is None else sig.action.value
+
+    common = [ts for ts in lv if ts in bt]
+    agree = sum(1 for ts in common if lv[ts] == bt[ts])
+    assert len(common) > 500
+    assert agree / len(common) >= 0.98      # équivalence quasi exacte
+    assert any(v for v in lv.values())      # le live décide bien (pas tout None)
+
+
+def test_live_sans_modele_reste_muette() -> None:
+    # warmup live SANS model_path → aucune proba → jamais de signal (honnête).
+    strat = CouleuvreV01()
+    asyncio.run(strat.warmup({"symbol": "T", "live": True, "timeframe": "H1"}))
+    frame = _close_only(300, seed=5)
+    for ts, row in frame.iterrows():
+        sig = asyncio.run(strat.on_tick(
+            TickData(symbol="T", price=float(row["bid_close"]), timestamp=ts)))
+        assert sig is None
+
+
 def test_walkforward_bout_en_bout(tmp_path) -> None:
     from pyea.training import run_walkforward
 

@@ -15,18 +15,33 @@ kill-switch global, la table SQLite pour les paires armées).
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+
 from pyea.brokers.broker_gateway import BrokerGateway
 from pyea.brokers.broker_runtime import broker_runtime
 from pyea.config.config_settings import Settings, get_settings
 from pyea.core.core_events import EventBus, event_bus
 from pyea.core.core_logging import get_logger
+from pyea.data.data_history_downloader import load_history, resample_history
 from pyea.data.data_market_feed import MarketDataFeed
 from pyea.live.live_engine import LiveTradingEngine
+from pyea.live.live_models import resolve_live_model
 from pyea.risk.risk_manager import RiskManager
 from pyea.storage.storage_trading_state import is_trading_enabled
 from pyea.strategies.strategy_registry import get_strategy
 
 logger = get_logger(__name__)
+
+#: Fenêtre d'historique local chargée pour amorcer la chauffe live d'un
+#: symbole (jours). Au-delà, le tampon glissant de la stratégie tronque de
+#: toute façon ; en deçà, un modèle D1 aurait trop peu de bougies.
+_WARMUP_HISTORY_DAYS = 400
+#: Bougies de chauffe conservées (tail) avant remise à la stratégie.
+_WARMUP_SEED_BARS = 500
 
 
 class LiveRuntime:
@@ -35,6 +50,7 @@ class LiveRuntime:
     def __init__(self, bus: EventBus) -> None:
         self._bus = bus
         self._settings: Settings | None = None
+        self._strategy_name: str = ""
         self._feed: MarketDataFeed | None = None
         self._engine: LiveTradingEngine | None = None
         self._running = False
@@ -42,6 +58,7 @@ class LiveRuntime:
     def configure(self, settings: Settings) -> None:
         """Câblé par ``app_factory`` au démarrage."""
         self._settings = settings
+        self._strategy_name = settings.strategy_name
 
     @property
     def is_running(self) -> bool:
@@ -66,6 +83,63 @@ class LiveRuntime:
             is_symbol_armed=is_trading_enabled,
         )
 
+    def _warmup_for(self, symbol: str) -> dict[str, Any]:
+        """Paramètres de chauffe live d'un symbole : modèle + historique récent.
+
+        Sélectionne le modèle du dernier run réussi de la paire, charge un
+        historique récent (chauffe des features/indicateurs récursifs), et
+        renvoie les paramètres du mode live de la stratégie. **Aucun modèle
+        entraîné → ``{}``** : la stratégie reste muette (honnête, jamais un
+        trade sans modèle).
+        """
+        model = resolve_live_model(self._strategy_name, symbol)
+        if model is None:
+            logger.info(
+                "Live %s : aucun modèle entraîné → paire non tradée (honnête).",
+                symbol,
+            )
+            return {}
+        frame = self._load_warmup_frame(symbol, model.timeframe)
+        logger.info(
+            "Live %s : modèle %s (pli %d, %s), chauffe %s bougies.",
+            symbol, model.run_id, model.fold, model.timeframe,
+            0 if frame is None else len(frame),
+        )
+        return {
+            "live": True,
+            "model_path": str(model.model_path),
+            "timeframe": model.timeframe,
+            "frame": frame,
+        }
+
+    def _load_warmup_frame(self, symbol: str, timeframe: str) -> pd.DataFrame | None:
+        """Historique local récent, ré-échantillonné au timeframe du modèle.
+
+        Best-effort : l'absence d'historique local n'empêche PAS le live (le
+        tampon de la stratégie se remplira des bougies live) — on renvoie
+        ``None`` et on log, sans lever.
+        """
+        settings = self._settings or get_settings()
+        data_dir = Path(settings.history_data_dir)
+        start = pd.Timestamp(
+            datetime.now(timezone.utc) - timedelta(days=_WARMUP_HISTORY_DAYS)
+        )
+        try:
+            frame = load_history(data_dir, symbol, start=start, end=None)
+        except FileNotFoundError:
+            try:  # fenêtre récente absente : on prend tout ce qui existe
+                frame = load_history(data_dir, symbol)
+            except FileNotFoundError:
+                logger.info("Live %s : pas d'historique local pour la chauffe.", symbol)
+                return None
+        except Exception as exc:  # historique illisible : on n'échoue pas le live
+            logger.warning("Live %s : historique de chauffe ignoré (%s).", symbol, exc)
+            return None
+        resampled = resample_history(frame, timeframe)
+        if resampled.empty:
+            return None
+        return resampled.tail(_WARMUP_SEED_BARS)
+
     async def start(self) -> None:
         """Démarre le flux live (idempotent). Broker connecté requis.
 
@@ -83,10 +157,10 @@ class LiveRuntime:
         symbols = list(settings.history_instruments)
 
         self._engine = self._build_engine(settings)
-        # Pas de modèle chargé au montage : Couleuvre reste muette (honnête)
-        # tant que la sélection de modèle live n'est pas câblée. Une stratégie
-        # non-ML trade normalement à travers ce même flux.
-        await self._engine.start(symbols, warmup_params={})
+        # Chaque symbole est chauffé avec SON modèle (un modèle par actif) :
+        # le provider résout le dernier modèle entraîné + l'historique récent.
+        # Aucun modèle pour un symbole → stratégie muette (honnête), pas d'erreur.
+        await self._engine.start(symbols, warmup_provider=self._warmup_for)
 
         gateway = broker_runtime.gateway
         assert gateway is not None  # garanti par _connected_gateway ci-dessus

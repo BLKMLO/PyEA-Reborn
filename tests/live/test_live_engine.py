@@ -189,6 +189,30 @@ def test_consomme_les_ticks_du_bus() -> None:
     assert len(gateway.orders) == 1
 
 
+def test_warmup_provider_par_symbole() -> None:
+    # Chaque symbole est chauffé avec SES paramètres (un modèle par actif).
+    seen: dict[str, dict] = {}
+
+    class _RecordStrategy(_MuteStrategy):
+        async def warmup(self, params: dict[str, Any]) -> None:
+            seen[params["symbol"]] = params
+
+    engine = LiveTradingEngine(
+        bus=EventBus(),
+        risk_manager=RiskManager(get_settings()),
+        strategy_factory=_RecordStrategy,
+        connected_gateway=lambda: _FakeGateway(),
+        is_globally_enabled=lambda: True,
+        is_symbol_armed=lambda _s: True,
+    )
+    asyncio.run(engine.start(
+        ["EURUSD", "GBPUSD"],
+        warmup_provider=lambda s: {"model_path": f"/models/{s}.txt"},
+    ))
+    assert seen["EURUSD"]["model_path"] == "/models/EURUSD.txt"
+    assert seen["GBPUSD"]["symbol"] == "GBPUSD"
+
+
 def _append(store: list, payload: dict) -> Any:
     async def _noop():
         store.append(payload)
