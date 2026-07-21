@@ -6,11 +6,18 @@ server:
   port: 8000
 
 broker:
-  # Broker actif : doit correspondre à une clé du registre de gateways.
+  # Broker actif au démarrage : doit correspondre à une clé du registre de
+  # gateways. Disponibles : "interactive_brokers", "metatrader5". On peut aussi
+  # en changer à chaud depuis la fenêtre de connexion du dashboard (liste
+  # déroulante) — ce choix runtime ne réécrit pas cette valeur.
   name: "interactive_brokers"
-  # "paper" ou "live". Le port TWS/Gateway correspondant est lu dans .env
-  # (IB_PORT_PAPER / IB_PORT_LIVE) : passer en live = changer cette valeur.
+  # "paper" ou "live". Pour IB : le port TWS/Gateway correspondant est lu dans
+  # .env (IB_PORT_PAPER / IB_PORT_LIVE) : passer en live = changer cette valeur.
+  # Pour MetaTrader 5, démo/réel dépend du COMPTE connecté dans le terminal
+  # (ce champ n'y change rien — il reste informatif).
   trading_mode: "paper"
+  # MetaTrader 5 : chemin OPTIONNEL du terminal (sinon dans .env). Vide = auto.
+  # mt5_terminal_path: ""
 
 strategy:
   # Stratégie active : doit correspondre à une clé du registre de stratégies.

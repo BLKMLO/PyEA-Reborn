@@ -1,6 +1,11 @@
-"""Tests du moteur de backtest avec une stratégie scriptée."""
+"""Tests du moteur de backtest (adossé à backtrader) avec une stratégie scriptée.
 
-import asyncio
+Le moteur délègue l'exécution à backtrader (cheat-on-close + Stop/Limit OCO),
+mais reproduit fidèlement le modèle PyEA : entrée au close de décision, barrières
+au prix exact, clôture forcée de fin de semaine, liquidation finale. Les valeurs
+attendues sont donc les mêmes qu'avec l'ancien moteur maison.
+"""
+
 from typing import Any
 
 import pandas as pd
@@ -87,7 +92,7 @@ def _frame_ohlc(bars: list[tuple[float, float, float]]) -> pd.DataFrame:
 
 def _run(script: dict[int, SignalAction], closes: list[float]):
     engine = BacktestEngine(ScriptedStrategy(script), RiskManager(get_settings()))
-    return asyncio.run(engine.run("EURUSD", _frame(closes), "H1"))
+    return engine.run("EURUSD", _frame(closes), "H1")
 
 
 def test_aller_retour_long_gagnant() -> None:
@@ -123,6 +128,28 @@ def test_strategie_muette_zero_trade() -> None:
     assert result.bars == 3
     # La courbe d'équité existe même sans trade (plate à 0).
     assert all(value == 0.0 for _, value in result.equity_curve)
+    # Les métriques avancées existent (None faute de trade), jamais absentes.
+    for key in ("sharpe_ratio", "sqn", "profit_factor"):
+        assert key in result.stats and result.stats[key] is None
+
+
+def test_metriques_avancees_backtrader() -> None:
+    # Un gagnant (long +0.5) puis un perdant (short -0.4) : profit factor et
+    # moyennes calculés depuis les trades, clés backtrader présentes.
+    result = _run(
+        {0: SignalAction.ENTER_LONG, 1: SignalAction.EXIT,
+         2: SignalAction.ENTER_SHORT, 3: SignalAction.EXIT},
+        [1.0, 1.5, 1.5, 1.9, 1.9],
+    )
+    size = get_settings().risk_max_position_size
+    assert len(result.trades) == 2
+    stats = result.stats
+    assert stats["profit_factor"] == round((0.5 * size) / (0.4 * size), 4)
+    assert stats["best_trade"] == round(0.5 * size, 5)
+    assert stats["worst_trade"] == round(-0.4 * size, 5)
+    assert stats["avg_trade_pnl"] == round((0.5 - 0.4) * size / 2, 5)
+    # Clés fournies par les analyzers backtrader (valeur numérique ou None).
+    assert "sharpe_ratio" in stats and "sqn" in stats
 
 
 def test_courbe_equite_bornee() -> None:
@@ -132,7 +159,7 @@ def test_courbe_equite_bornee() -> None:
 
 def _run_barrier(strategy: BarrierStrategy, frame: pd.DataFrame):
     engine = BacktestEngine(strategy, RiskManager(get_settings()))
-    return asyncio.run(engine.run("EURUSD", frame, "H1"))
+    return engine.run("EURUSD", frame, "H1")
 
 
 def test_barriere_take_profit_long() -> None:
@@ -201,7 +228,7 @@ def test_cloture_forcee_fin_de_semaine() -> None:
     engine = BacktestEngine(
         ScriptedStrategy({0: SignalAction.ENTER_LONG}), RiskManager(get_settings())
     )
-    result = asyncio.run(engine.run("EURUSD", frame, "D1"))
+    result = engine.run("EURUSD", frame, "D1")
     size = get_settings().risk_max_position_size
     assert len(result.trades) == 1
     trade = result.trades[0]

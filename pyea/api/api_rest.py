@@ -22,7 +22,6 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from pyea.brokers.broker_credentials import broker_credentials
 from pyea.brokers.broker_runtime import broker_runtime
 from pyea.config.config_settings import get_settings
 from pyea.core.core_logging import get_logger, web_log_buffer
@@ -54,9 +53,10 @@ async def get_status() -> dict[str, Any]:
     return {
         "app_version": "0.1.0",
         "trading_mode": settings.trading_mode,
-        "broker": settings.broker_name,
+        # Broker ACTIF réel (peut différer de la config si l'utilisateur a
+        # basculé depuis la fenêtre de connexion), pas la valeur de config brute.
+        "broker": broker_runtime.active_name or settings.broker_name,
         "broker_connected": broker_runtime.is_connected(),  # état RÉEL de la gateway
-        "broker_credentials_set": broker_credentials.is_configured(),
         "market_data_live": MARKET_DATA_LIVE,  # False → l'UI marque « DÉMO »
         "strategy": settings.strategy_name,
         "strategy_enabled": settings.strategy_enabled,
@@ -65,23 +65,62 @@ async def get_status() -> dict[str, Any]:
     }
 
 
+# --- Connexion broker ---
+# Aucun broker supporté ne s'authentifie par login/mot de passe dans PyEA :
+# Interactive Brokers passe par TWS / IB Gateway (déjà logué), MetaTrader 5
+# par un terminal MT5 déjà ouvert et connecté à un compte. PyEA ne fait que
+# s'attacher — la fenêtre n'affiche donc que des paramètres en lecture seule
+# (+ une liste déroulante pour choisir le broker) et l'état réel.
+
+
+class BrokerSelectIn(BaseModel):
+    """Broker à activer avant connexion (facultatif : défaut = broker actif)."""
+
+    broker: str | None = None
+
+
+@router.get("/brokers")
+async def list_brokers() -> dict[str, Any]:
+    """Brokers disponibles (liste déroulante) + paramètres/état de chacun."""
+    settings = get_settings()
+    return {
+        "active": broker_runtime.active_name,
+        "trading_mode": settings.trading_mode,
+        "brokers": broker_runtime.available(settings),
+    }
+
+
 @router.post("/broker/connect")
-async def connect_broker() -> dict[str, Any]:
-    """Tente la connexion au broker. Retour HONNÊTE : tant que la gateway IB
-    réelle n'est pas implémentée, renvoie 501 (pas de fausse connexion)."""
+async def connect_broker(select: BrokerSelectIn | None = None) -> dict[str, Any]:
+    """Sélectionne (optionnel) puis connecte le broker.
+
+    Retour HONNÊTE : tant qu'une passerelle réelle n'est pas branchée (IB) ou
+    que sa dépendance/terminal manque (MetaTrader5 non installé), renvoie une
+    erreur explicite — JAMAIS une fausse connexion réussie.
+    """
+    if select is not None and select.broker:
+        try:
+            broker_runtime.select(select.broker)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except RuntimeError as exc:  # ex. changer de broker en étant connecté
+            raise HTTPException(status_code=409, detail=str(exc))
     try:
         await broker_runtime.connect()
     except NotImplementedError:
         raise HTTPException(
             status_code=501,
-            detail="Connexion au broker indisponible : la passerelle IB est "
+            detail="Connexion à ce broker indisponible : la passerelle est "
             "encore en développement (aucune fausse connexion n'est simulée).",
         )
-    except Exception as exc:  # échec réel (TWS éteint, identifiants…)
+    except ImportError as exc:  # dépendance broker absente (ex. MetaTrader5)
+        logger.warning("Dépendance broker manquante : %s", exc)
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:  # échec réel (TWS/terminal éteint…)
         logger.warning("Connexion broker échouée : %s", exc)
         raise HTTPException(status_code=502, detail=f"Connexion au broker échouée : {exc}")
     logger.info("Connexion au broker établie.")
-    return {"broker_connected": broker_runtime.is_connected()}
+    return {"active": broker_runtime.active_name, "broker_connected": broker_runtime.is_connected()}
 
 
 @router.post("/broker/disconnect")
@@ -89,69 +128,7 @@ async def disconnect_broker() -> dict[str, Any]:
     """Coupe la connexion au broker (toujours autorisé)."""
     await broker_runtime.disconnect()
     logger.info("Déconnexion du broker.")
-    return {"broker_connected": broker_runtime.is_connected()}
-
-
-# --- Identifiants broker (saisis au runtime, gardés en mémoire) ---
-
-
-class BrokerCredentialsIn(BaseModel):
-    """Corps du PUT : le mot de passe est optionnel pour permettre de ne
-    changer que l'identifiant sans re-saisir le mot de passe masqué."""
-
-    username: str
-    password: str | None = None
-
-
-def _broker_credentials_view() -> dict[str, Any]:
-    """Vue publique des identifiants : JAMAIS le mot de passe en clair.
-
-    On renvoie l'identifiant (utile pour reconnaître le compte) et un
-    booléen ``configured`` ; le front masque le mot de passe par des
-    étoiles lorsque ``configured`` est vrai.
-    """
-    return {
-        "broker": get_settings().broker_name,
-        "configured": broker_credentials.is_configured(),
-        "username": broker_credentials.username,
-    }
-
-
-@router.get("/broker/credentials")
-async def get_broker_credentials() -> dict[str, Any]:
-    """Indique si des identifiants broker sont en mémoire (sans les révéler)."""
-    return _broker_credentials_view()
-
-
-@router.put("/broker/credentials")
-async def put_broker_credentials(payload: BrokerCredentialsIn) -> dict[str, Any]:
-    """Enregistre les identifiants broker EN MÉMOIRE (jusqu'à l'arrêt serveur).
-
-    Mot de passe vide + identifiants déjà présents = on garde le mot de
-    passe existant (l'utilisateur n'a pas re-saisi les étoiles). Mot de
-    passe vide sans identifiants préalables = erreur 422.
-    """
-    username = payload.username.strip()
-    if not username:
-        raise HTTPException(status_code=422, detail="Nom d'utilisateur requis.")
-    password = payload.password or ""
-    if not password:
-        if not broker_credentials.is_configured():
-            raise HTTPException(status_code=422, detail="Mot de passe requis.")
-        broker_credentials.update_username(username)
-    else:
-        broker_credentials.set(username, password)
-    # Journalisation SANS le mot de passe (jamais de secret dans les logs).
-    logger.info("Identifiants broker enregistrés (utilisateur : %s).", username)
-    return _broker_credentials_view()
-
-
-@router.delete("/broker/credentials")
-async def delete_broker_credentials() -> dict[str, Any]:
-    """Efface les identifiants broker de la mémoire."""
-    broker_credentials.clear()
-    logger.info("Identifiants broker effacés.")
-    return _broker_credentials_view()
+    return {"active": broker_runtime.active_name, "broker_connected": broker_runtime.is_connected()}
 
 
 @router.get("/symbols")

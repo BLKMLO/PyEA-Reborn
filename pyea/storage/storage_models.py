@@ -48,6 +48,7 @@ class TrainingRun(Base):
     oos_pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
     oos_win_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
     oos_max_drawdown: Mapped[float | None] = mapped_column(Float, nullable=True)
+    oos_profit_factor: Mapped[float | None] = mapped_column(Float, nullable=True)
     artifacts_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
 

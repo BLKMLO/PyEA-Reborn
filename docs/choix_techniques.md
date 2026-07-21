@@ -81,6 +81,34 @@ développe le raisonnement pour celles qui structurent le projet.
     walk-forward out-of-sample de cette page EST le test de qualité de la
     paire.
 
+- **Moteur de backtest : backtrader (vendorisé), pas de moteur maison** :
+  l'exécution simulée et les métriques ne sont plus recalculées à la main
+  mais déléguées à **backtrader** (moteur événementiel éprouvé, GPLv3, pur
+  Python). Décisions :
+  - *backtrader plutôt que vectorbt ou backtesting.py* : `vectorbt` impose
+    `numba`/`llvmlite` (binaires natifs, **non vendorisables** cross-OS) et
+    ré-introduit `scikit-learn` ; `backtesting.py` remplit toujours à la
+    bougie *suivante* (crash de validation des barrières, clôture week-end
+    ingérable). backtrader est **pur Python** (donc vendorisable) et son
+    mode *cheat-on-close* remplit au close de la bougie de décision —
+    exactement le modèle PyEA.
+  - *Vendorisé dans `lib/backtrader/`* (zéro `pip install`, hors-ligne) :
+    répond à la fragilité d'install Windows connue et à l'esprit « VPS sans
+    internet ». Possible car pur Python ; les libs à extension native
+    (lightgbm/pyarrow/numba) restent, elles, en pip. GPLv3 : aucune
+    obligation tant que PyEA n'est pas **distribué** (usage perso/VPS = OK),
+    l'imposerait en cas de distribution publique.
+  - *Le flux PyEA est préservé* : on garde `Strategy → Signal → RiskManager
+    → OrderRequest` DANS le callback par bougie ; backtrader ne fait que
+    l'exécution + la comptabilité. Entrée Market (cheat-on-close), barrières
+    = Stop (SL) + Limit (TP) natifs **OCO** au prix exact, tie-break = stop
+    (natif), clôture forcée fin de semaine + liquidation finale via ordres
+    Market. On ne trade qu'1 unité nominale, le P&L linéaire est re-scalé par
+    `max_position_size` (Sharpe/SQN invariants d'échelle). **Fidélité
+    vérifiée bougie à bougie** : les valeurs des tests moteur sont identiques
+    à l'ancien moteur maison ; gain net = analyzers standard (Sharpe, SQN,
+    profit factor) et une exécution éprouvée.
+
 - **Dukascopy comme source d'historique** (plutôt qu'IB ou yfinance) :
   flux public gratuit sans compte, M1 remontant avant 2010 sur le forex ;
   IB exige TWS connecté et impose des limites de débit sévères sur

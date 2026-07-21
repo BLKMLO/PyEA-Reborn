@@ -6,7 +6,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from pyea.app_factory import create_app
-from pyea.brokers.broker_credentials import broker_credentials
 from pyea.config.config_settings import get_settings
 
 
@@ -15,17 +14,14 @@ def _client() -> TestClient:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_state(tmp_path: Path):
-    """Isole l'état partagé entre tests : identifiants broker (singleton) et
-    base SQLite (une base temporaire par test → journal des trades vierge,
-    pas de fuite d'un test à l'autre)."""
-    broker_credentials.clear()
+def _isolate_db(tmp_path: Path):
+    """Base SQLite temporaire par test → journal des trades vierge, pas de
+    fuite d'état d'un test à l'autre."""
     settings = get_settings()
     original_url = settings.database_url
     settings.database_url = f"sqlite:///{tmp_path}/test.db"
     yield
     settings.database_url = original_url
-    broker_credentials.clear()
 
 
 def test_dashboard_repond() -> None:
@@ -157,70 +153,45 @@ def test_price_history_symbole_inconnu_404() -> None:
     assert response.status_code == 404
 
 
-def test_broker_credentials_non_configure_par_defaut() -> None:
+def test_brokers_liste_deroulante() -> None:
+    # La fenêtre de connexion propose une liste déroulante des brokers
+    # disponibles (IB + MetaTrader 5), chacun avec ses paramètres en lecture
+    # seule + son état de connexion réel. Aucune notion d'identifiants.
     with _client() as client:
-        response = client.get("/api/broker/credentials")
+        data = client.get("/api/brokers").json()
         status = client.get("/api/status").json()
-    data = response.json()
-    assert response.status_code == 200
-    assert data["configured"] is False
-    assert data["username"] == ""
-    assert status["broker_credentials_set"] is False
+    names = {b["name"] for b in data["brokers"]}
+    assert {"interactive_brokers", "metatrader5"} <= names
+    assert data["active"] == "interactive_brokers"  # défaut = config
+    ib = next(b for b in data["brokers"] if b["name"] == "interactive_brokers")
+    assert ib["label"] == "Interactive Brokers"
+    assert int(ib["params"]["Port"]) > 0
+    assert ib["connected"] is False and ib["active"] is True
+    mt5 = next(b for b in data["brokers"] if b["name"] == "metatrader5")
+    assert mt5["label"] == "MetaTrader 5"
+    assert mt5["connected"] is False and mt5["active"] is False
+    # Plus aucune notion d'identifiants : l'endpoint credentials a disparu.
+    assert client.get("/api/broker/credentials").status_code == 404
+    assert client.get("/api/broker").status_code == 404  # remplacé par /api/brokers
+    assert "broker_credentials_set" not in status
 
 
-def test_broker_credentials_enregistrement_et_masquage() -> None:
+def test_connexion_metatrader_sans_paquet_erreur_honnete() -> None:
+    # MetaTrader5 n'est pas installé (sandbox Linux) : la connexion renvoie une
+    # 503 explicite (« installez MetaTrader5 »), JAMAIS une fausse réussite. Le
+    # broker sélectionné devient bien actif malgré l'échec (choix de l'utilisateur).
     with _client() as client:
-        put = client.put(
-            "/api/broker/credentials",
-            json={"username": "marianne", "password": "secret"},
-        )
-        assert put.status_code == 200
-        assert put.json()["configured"] is True
-        # Le mot de passe ne fuit JAMAIS via l'API.
-        get = client.get("/api/broker/credentials").json()
-        assert get["username"] == "marianne"
-        assert "password" not in get
-        assert "secret" not in str(get)
-        assert client.get("/api/status").json()["broker_credentials_set"] is True
+        response = client.post("/api/broker/connect", json={"broker": "metatrader5"})
+        assert response.status_code == 503
+        assert "MetaTrader5" in response.json()["detail"]
+        assert client.get("/api/brokers").json()["active"] == "metatrader5"
+        assert client.get("/api/status").json()["broker_connected"] is False
 
 
-def test_broker_credentials_mdp_vide_conserve_l_existant() -> None:
+def test_connexion_broker_inconnu_404() -> None:
     with _client() as client:
-        client.put(
-            "/api/broker/credentials",
-            json={"username": "marianne", "password": "secret"},
-        )
-        # Re-PUT sans mot de passe : identifiant changé, mdp conservé.
-        put = client.put("/api/broker/credentials", json={"username": "marianne2"})
-        assert put.status_code == 200
-    assert broker_credentials.username == "marianne2"
-    assert broker_credentials.password == "secret"
-
-
-def test_broker_credentials_mdp_requis_si_rien_enregistre() -> None:
-    with _client() as client:
-        put = client.put("/api/broker/credentials", json={"username": "marianne"})
-    assert put.status_code == 422
-
-
-def test_broker_credentials_username_requis() -> None:
-    with _client() as client:
-        put = client.put(
-            "/api/broker/credentials", json={"username": "  ", "password": "x"}
-        )
-    assert put.status_code == 422
-
-
-def test_broker_credentials_suppression() -> None:
-    with _client() as client:
-        client.put(
-            "/api/broker/credentials",
-            json={"username": "marianne", "password": "secret"},
-        )
-        delete = client.delete("/api/broker/credentials")
-        assert delete.status_code == 200
-        assert delete.json()["configured"] is False
-        assert client.get("/api/broker/credentials").json()["configured"] is False
+        response = client.post("/api/broker/connect", json={"broker": "nimporte"})
+        assert response.status_code == 404
 
 
 def test_positions_vides_sans_broker() -> None:
@@ -244,11 +215,13 @@ def test_status_broker_deconnecte_et_marche_demo() -> None:
 
 
 def test_connexion_broker_retour_honnete() -> None:
-    # La connexion IB n'est pas implémentée : réponse 501 explicite, JAMAIS
-    # une fausse connexion réussie.
+    # La connexion IB est désormais IMPLÉMENTÉE (ib_async), mais ne peut jamais
+    # simuler une réussite : sans le paquet (sandbox) → 503 « installez
+    # ib_async », avec le paquet mais sans TWS lancé → 502. Jamais 501, jamais
+    # une fausse connexion réussie. On vérifie l'invariant d'honnêteté.
     with _client() as client:
         response = client.post("/api/broker/connect")
-        assert response.status_code == 501
+        assert response.status_code in (502, 503)
         assert client.get("/api/status").json()["broker_connected"] is False
 
 

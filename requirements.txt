@@ -25,6 +25,11 @@ SQLAlchemy>=2.0
 # Broker Interactive Brokers (fork communautaire maintenu d'ib_insync)
 ib_async>=1.0
 
+# Broker MetaTrader 5 — paquet officiel, Windows UNIQUEMENT (IPC vers le
+# terminal MT5). Non installable sous Linux/macOS (dev/CI), d'où l'import
+# paresseux dans broker_metatrader.py : décommenter sur le poste Windows.
+# MetaTrader5>=5.0.45 ; sys_platform == "win32"
+
 # Stratégie (Couleuvre_v0.1 — logique développée plus tard)
 lightgbm>=4.3
 
@@ -32,6 +37,11 @@ lightgbm>=4.3
 pandas>=2.2
 numpy>=1.26          # features de Couleuvre (import direct, sinon transitif via pandas)
 pyarrow>=16.0
+
+# Moteur de backtest : backtrader (GPLv3, PUR PYTHON) — NON listé ici car
+# VENDORISÉ dans lib/backtrader/ (zéro install, hors-ligne). pyea/__init__.py
+# préfixe lib/ dans sys.path. Aucun pip requis. Pour le mettre à jour :
+# remplacer le dossier lib/backtrader/ par une nouvelle version.
 
 # Tests
 pytest>=8.0

@@ -81,54 +81,36 @@
     </div>
   </section>
 
-  <!-- Fenêtre d'identifiants broker : ouverte au clic sur le badge broker du
-       header. Les identifiants sont gardés EN MÉMOIRE côté serveur (effacés à
-       l'arrêt) ; si déjà enregistrés, le mot de passe s'affiche en étoiles. -->
+  <!-- Fenêtre de connexion broker : ouverte au clic sur le badge broker du
+       header. Aucun broker ne prend de login/mot de passe dans PyEA —
+       Interactive Brokers s'authentifie via TWS / IB Gateway, MetaTrader 5 via
+       un terminal MT5 déjà ouvert. La liste déroulante choisit le broker ;
+       les paramètres (lecture seule) et la note dépendent du broker choisi. -->
   <div id="broker-modal"
        class="fixed inset-0 z-50 hidden items-center justify-center bg-slate-950/70 p-4">
     <div class="w-full max-w-sm rounded-lg border border-slate-700 bg-slate-800 p-5 shadow-xl">
       <div class="mb-3 flex items-center justify-between">
-        <h3 class="text-sm font-semibold">Identifiants <span id="broker-modal-name">broker</span></h3>
+        <h3 class="text-sm font-semibold">Connexion broker</h3>
         <button id="broker-modal-close" class="text-slate-400 hover:text-slate-200" aria-label="Fermer">✕</button>
       </div>
-      <form id="broker-form" class="space-y-3">
-        <div>
-          <label class="mb-1 block text-xs text-slate-400" for="broker-username">Nom d'utilisateur</label>
-          <input id="broker-username" type="text" autocomplete="username"
-                 class="w-full rounded border border-slate-600 bg-slate-900 px-2 py-1.5 text-sm outline-none focus:border-emerald-500">
-        </div>
-        <div>
-          <label class="mb-1 block text-xs text-slate-400" for="broker-password">Mot de passe</label>
-          <input id="broker-password" type="password" autocomplete="current-password"
-                 class="w-full rounded border border-slate-600 bg-slate-900 px-2 py-1.5 text-sm outline-none focus:border-emerald-500">
-          <p id="broker-password-hint" class="mt-1 hidden text-[11px] text-slate-500">
-            Laisser vide pour conserver le mot de passe enregistré.
-          </p>
-        </div>
-        <p class="text-[11px] text-slate-500">
-          Conservés en mémoire uniquement, jusqu'à l'arrêt du serveur — jamais écrits sur disque.
-        </p>
-        <p id="broker-error" class="hidden text-[11px] text-red-400"></p>
-        <div class="flex items-center justify-between pt-1">
-          <button type="button" id="broker-clear"
-                  class="hidden rounded px-2 py-1 text-xs text-red-400 hover:bg-slate-700">Effacer</button>
-          <div class="ml-auto flex gap-2">
-            <button type="button" id="broker-cancel"
-                    class="rounded px-3 py-1 text-xs text-slate-300 hover:bg-slate-700">Annuler</button>
-            <button type="submit"
-                    class="rounded bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-500">Enregistrer</button>
-          </div>
-        </div>
-        <div class="border-t border-slate-700 pt-3">
+      <label class="mb-1 block text-[11px] uppercase tracking-wide text-slate-400" for="broker-select">Courtier</label>
+      <select id="broker-select"
+              class="mb-3 w-full rounded border border-slate-600 bg-slate-900 px-2 py-1.5 text-sm"></select>
+      <dl id="broker-params" class="space-y-1.5 text-xs">
+        <!-- Rempli dynamiquement (paramètres du broker sélectionné) + l'état. -->
+      </dl>
+      <p id="broker-hint" class="mt-3 text-[11px] text-slate-500"></p>
+      <p id="broker-error" class="mt-2 hidden text-[11px] text-red-400"></p>
+      <div class="mt-4 flex items-center justify-between">
+        <button type="button" id="broker-cancel"
+                class="rounded px-3 py-1 text-xs text-slate-300 hover:bg-slate-700">Fermer</button>
+        <div class="flex gap-2">
+          <button type="button" id="broker-disconnect"
+                  class="hidden rounded bg-slate-600 px-3 py-1 text-xs font-semibold text-white hover:bg-slate-500">Se déconnecter</button>
           <button type="button" id="broker-connect"
-                  class="w-full rounded bg-sky-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-600">
-            Se connecter au broker
-          </button>
-          <p class="mt-1 text-[11px] text-slate-500">
-            État actuel : <span id="broker-connection-state" class="font-semibold">—</span>
-          </p>
+                  class="rounded bg-sky-700 px-3 py-1 text-xs font-semibold text-white hover:bg-sky-600">Se connecter</button>
         </div>
-      </form>
+      </div>
     </div>
   </div>
 {% endblock %}

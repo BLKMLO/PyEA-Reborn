@@ -7,7 +7,6 @@ boucle d'événements du serveur (dashboard live inclus).
 
 from __future__ import annotations
 
-import asyncio
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -101,7 +100,7 @@ def run_backtest(request: BacktestRunRequest) -> dict[str, Any]:
         )
 
     engine = BacktestEngine(strategy_cls(), RiskManager(settings))
-    result = asyncio.run(engine.run(request.symbol, frame, request.timeframe))
+    result = engine.run(request.symbol, frame, request.timeframe)
 
     return {
         "symbol": result.symbol,

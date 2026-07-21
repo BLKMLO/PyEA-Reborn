@@ -56,11 +56,40 @@ def test_run_walkforward_strategie_muette(tmp_path: Path) -> None:
     )
     assert len(report["folds"]) == 3
     assert report["oos_stats"]["trades"] == 0
+    # Profit factor agrégé exposé (None faute de trade OOS), jamais absent.
+    assert "profit_factor" in report["oos_stats"]
+    assert report["oos_stats"]["profit_factor"] is None
     assert report["cancelled"] is False
     # 2 événements de progression par pli (train + test).
     assert len(events) == 6
     # Les artefacts sont archivés.
     assert (tmp_path / "run" / "metadata.json").exists()
+
+
+def test_win_rate_oos_pondere_par_le_nombre_de_trades() -> None:
+    """Le taux de gain OOS s'agrège sur TOUS les trades, pas en moyennant les
+    taux par pli (comme le profit factor). Un pli à 1 trade gagnant ne doit pas
+    peser autant qu'un pli à 100 trades à 50 %."""
+    from pyea.training.training_walkforward import WalkForwardFold, _report
+
+    # Pli 1 : 1 trade, 100 % gagnant. Pli 2 : 100 trades, 50 % gagnants.
+    fold1 = WalkForwardFold(
+        index=1, train_start="", train_end="", test_start="", test_end="",
+        train_bars=0, test_bars=0,
+        test_stats={"trades": 1, "total_pnl": 1.0, "win_rate": 1.0},
+    )
+    fold2 = WalkForwardFold(
+        index=2, train_start="", train_end="", test_start="", test_end="",
+        train_bars=0, test_bars=0,
+        test_stats={"trades": 100, "total_pnl": 0.0, "win_rate": 0.5},
+    )
+    # 1 gagnant (pli 1) + 50 gagnants / 50 perdants (pli 2) = 51/101 trades.
+    oos_pnls = [1.0] + [1.0] * 50 + [-1.0] * 50
+    report = _report("EURUSD", "H1", [fold1, fold2], [], oos_pnls, cancelled=False)
+    # Agrégat honnête = 51/101 ≈ 0,5050 ; la moyenne des taux par pli
+    # (1,0 + 0,5)/2 = 0,75 aurait été trompeuse.
+    assert report["oos_stats"]["win_rate"] == round(51 / 101, 4)
+    assert report["oos_stats"]["trades"] == 101
 
 
 def test_run_walkforward_annulation(tmp_path: Path) -> None:

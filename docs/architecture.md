@@ -42,18 +42,20 @@ PyEA-Reborn/
 │   │
 │   ├── backtest/
 │   │   └── backtest_engine.py             # Rejoue l'historique via le flux complet
-│   │                                      # Strategy → RiskManager → ordre simulé
-│   │                                      # (barrières TP/SL intrabar, clôture fin de semaine).
+│   │                                      # Strategy → RiskManager → backtrader (exécution +
+│   │                                      # métriques : Sharpe/SQN/profit factor). Barrières
+│   │                                      # TP/SL (Stop/Limit OCO), clôture fin de semaine.
 │   │
 │   ├── training/
 │   │   ├── training_walkforward.py        # Découpe walk-forward + orchestration train/test.
 │   │   └── training_jobs.py               # Jobs en thread, progression → bus → WebSocket.
 │   │
 │   ├── brokers/
-│   │   ├── broker_gateway.py              # Contrat générique BrokerGateway + registre.
-│   │   ├── broker_credentials.py          # Identifiants broker saisis au runtime, gardés EN MÉMOIRE (jamais sur disque).
-│   │   ├── broker_runtime.py              # Gateway active + état de connexion RÉEL (singleton, lu par l'API).
-│   │   └── broker_interactive_brokers.py  # 1re implémentation (ib_async). Suivant : broker_<nom>.py.
+│   │   ├── broker_gateway.py              # Contrat générique BrokerGateway + registre (+ list_gateways).
+│   │   ├── broker_credentials.py          # Store login/mdp en mémoire — réservé à un futur broker (ni IB ni MT5 n'en ont besoin).
+│   │   ├── broker_runtime.py              # Broker actif + état de connexion RÉEL + bascule runtime (singleton, lu par l'API).
+│   │   ├── broker_interactive_brokers.py  # Interactive Brokers (ib_async, via TWS/IB Gateway) : connexion + lecture de compte RÉELLES.
+│   │   └── broker_metatrader.py           # MetaTrader 5 (paquet MetaTrader5, attache à un terminal MT5) : connexion + lecture de compte RÉELLES.
 │   │
 │   ├── storage/
 │   │   ├── storage_models.py              # Modèles SQLAlchemy (signals, trades, états, runs).
@@ -64,7 +66,7 @@ PyEA-Reborn/
 │   │
 │   ├── api/
 │   │   ├── api_pages.py                   # Pages HTML : / (live), /backtest, /training (Jinja2 + HTMX).
-│   │   ├── api_rest.py                    # REST : status, broker/{credentials,connect,disconnect}, symbols, trading, positions, logs, charts.
+│   │   ├── api_rest.py                    # REST : status, brokers (liste + connect/disconnect), symbols, trading, positions, logs, charts.
 │   │   ├── api_backtest.py                # REST : /api/backtest/datasets et /api/backtest/run.
 │   │   ├── api_training.py                # REST : /api/training/run, current-job, jobs/{id}, runs, definition/{strategy}.
 │   │   └── api_websocket.py               # WebSocket /ws : relais du bus vers les navigateurs.
@@ -80,6 +82,9 @@ PyEA-Reborn/
 │           └── vendor/                    # Tailwind, HTMX, Lightweight Charts (chandeliers),
 │                                          # Chart.js (futurs graphiques P&L) — local, pas de CDN.
 │
+├── lib/                                   # Dépendances Python PURES vendorisées (zéro install) :
+│   └── backtrader/                        # Moteur de backtest (GPLv3). pyea/__init__.py préfixe
+│                                          # lib/ dans sys.path avant tout `import backtrader`.
 ├── docs/                                  # Cette documentation.
 └── tests/                                 # Structure miroir de pyea/ (un dossier par package).
 ```

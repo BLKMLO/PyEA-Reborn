@@ -39,7 +39,7 @@ def _random_walk(n: int, seed: int) -> pd.DataFrame:
 
 def _run_oos(strategy: CouleuvreV01, frame: pd.DataFrame):
     engine = BacktestEngine(strategy, RiskManager(get_settings()))
-    return asyncio.run(engine.run("TEST", frame, "H1"))
+    return engine.run("TEST", frame, "H1")
 
 
 def test_train_retourne_un_modele_et_un_rapport() -> None:
@@ -118,7 +118,9 @@ def test_walkforward_bout_en_bout(tmp_path) -> None:
         cancelled=lambda: False,
     )
     assert report["cancelled"] is False
-    assert set(report["oos_stats"]) == {"trades", "total_pnl", "win_rate", "max_drawdown"}
+    assert set(report["oos_stats"]) == {
+        "trades", "total_pnl", "win_rate", "max_drawdown", "profit_factor"
+    }
     assert (tmp_path / "metadata.json").exists()
     assert (tmp_path / "fold_1" / "model.txt").exists()  # modèle par pli sauvé
     assert (tmp_path / "fold_1" / "features.json").exists()

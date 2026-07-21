@@ -38,6 +38,13 @@ class Settings(BaseSettings):
     ib_client_id: int = 1
     ib_account_id: str = ""
 
+    # MetaTrader 5 : PyEA s'ATTACHE à un terminal MT5 déjà lancé et connecté
+    # (comme TWS/IB Gateway pour IB) — aucun identifiant saisi dans PyEA. Le
+    # chemin ci-dessous est OPTIONNEL : renseigné, il permet à
+    # MetaTrader5.initialize() de lancer le bon terminal s'il n'est pas déjà
+    # ouvert. Vide = détection automatique du terminal en cours d'exécution.
+    mt5_terminal_path: str = ""
+
     # --- Fonctionnel (config.yaml, surchargeables par .env) ---
     # Les bornes (ge/gt/le) transforment une valeur absurde saisie dans
     # config.yaml en ERREUR CLAIRE AU DÉMARRAGE plutôt qu'en comportement
@@ -101,6 +108,7 @@ def _yaml_overrides(raw: dict[str, Any]) -> dict[str, Any]:
         "server_port": server.get("port"),
         "broker_name": broker.get("name"),
         "trading_mode": broker.get("trading_mode"),
+        "mt5_terminal_path": broker.get("mt5_terminal_path"),
         "strategy_name": strategy.get("name"),
         "strategy_enabled": strategy.get("enabled"),
         "ui_chart_refresh_seconds": ui.get("chart_refresh_seconds"),

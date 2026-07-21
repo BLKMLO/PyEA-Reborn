@@ -22,6 +22,24 @@ class BrokerGateway(ABC):
 
     #: Identifiant unique, utilisé par le registre et la config (broker.name).
     name: str
+    #: Nom lisible affiché dans l'UI (liste déroulante, titre de fenêtre).
+    #: Défaut = ``name`` si laissé vide.
+    label: str = ""
+
+    # --- Description pour la fenêtre de connexion (lecture seule) ---
+    def connection_info(self) -> dict[str, str]:
+        """Paramètres de connexion à afficher (libellé → valeur).
+
+        Chaque broker décrit les SIENS (IB : hôte/port/client ID ;
+        MetaTrader : chemin du terminal). Jamais de secret ici — ces
+        paramètres sont en lecture seule dans la fenêtre du dashboard.
+        """
+        return {}
+
+    def connection_hint(self) -> str:
+        """Phrase d'explication affichée sous les paramètres (comment PyEA
+        s'authentifie auprès de ce broker). Vide = aucune note."""
+        return ""
 
     # --- Cycle de vie ---
     @abstractmethod
@@ -80,3 +98,14 @@ def get_gateway(name: str) -> Type[BrokerGateway]:
     except KeyError:
         available = ", ".join(sorted(_REGISTRY)) or "(aucune)"
         raise KeyError(f"Gateway inconnue '{name}'. Disponibles : {available}")
+
+
+def list_gateways() -> list[dict[str, str]]:
+    """Brokers enregistrés, pour peupler la liste déroulante de l'UI.
+
+    Retour trié : ``[{"name": ..., "label": ...}, ...]``.
+    """
+    return [
+        {"name": cls.name, "label": cls.label or cls.name}
+        for _, cls in sorted(_REGISTRY.items())
+    ]

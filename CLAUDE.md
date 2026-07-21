@@ -111,7 +111,7 @@ jamais commité — modèle dans `.env.example`).
 ## État du projet
 
 - Échafaudage complet et fonctionnel : serveur web, REST + WebSocket,
-  registres stratégie/broker, SQLAlchemy (SQLite), 106 tests verts.
+  registres stratégie/broker, SQLAlchemy (SQLite), 108 tests verts.
 - Dashboard live façon TradingView : chandeliers M1 au centre
   (**TradingView Lightweight Charts** : pan/zoom natifs, historique
   paginé via `?before=`, refresh incrémental `series.update` qui
@@ -129,12 +129,16 @@ jamais commité — modèle dans `.env.example`).
   SQLite (`storage_trading_state.py`, défaut = Stopped), relu à chaque
   changement d'onglet (`GET /api/trading/{symbol}`), bascule via
   `PUT /api/trading/{symbol}`, confirmation JS si mode live,
-  **badge broker du header cliquable → fenêtre modale d'identifiants**
-  (nom d'utilisateur + mot de passe gardés EN MÉMOIRE via
-  `brokers/broker_credentials.py`, jamais sur disque ni en log, effacés à
-  l'arrêt ; `GET/PUT/DELETE /api/broker/credentials`, mot de passe jamais
-  renvoyé par l'API — masqué en étoiles si déjà enregistré ; clé 🔑 sur le
-  badge quand configuré ; `broker_credentials_set` ajouté à `/api/status`),
+  **badge broker du header cliquable → fenêtre de connexion broker**
+  (**liste déroulante pour choisir le courtier** — Interactive Brokers ou
+  MetaTrader 5 —, paramètres du broker choisi en LECTURE SEULE + note
+  d'authentification propre à chaque broker + bouton Se connecter/déconnecter
+  + état réel ; `GET /api/brokers`, `POST /api/broker/connect|disconnect`).
+  **Aucun login/mot de passe dans PyEA** : IB s'authentifie via TWS/IB
+  Gateway, MetaTrader 5 via un terminal MT5 déjà ouvert (compte démo/réel
+  choisi dans le terminal). Broker actif = `broker.name` de config au
+  démarrage, changeable à chaud depuis la fenêtre (déconnexion requise pour
+  basculer ; le choix runtime ne réécrit pas la config).
   panneau bas Positions (fermées grisées, récentes en premier) / Logs,
   P&L total en bas à droite, **nav à 3 pages dans le header : Live |
   Backtest | Entraînement**. Rafraîchissement du seul graphique actif
@@ -154,17 +158,29 @@ jamais commité — modèle dans `.env.example`).
   `/api/backtest/datasets` qui scanne `data/history/`), exécution via
   `POST /api/backtest/run` (endpoint sync → threadpool FastAPI, ne bloque
   pas le live), résultats = cartes stats (bougies, trades, P&L, taux de
-  gain, drawdown max), courbe d'équité (Chart.js) et table des trades.
-  Moteur : `pyea/backtest/backtest_engine.py` — rejoue bougie par bougie
-  via le flux complet `Strategy → Signal → RiskManager → OrderRequest`
-  (exécution simulée, **modèle v2** : décision prise au bid_close, pas de
-  spread ni slippage, **barrières TP/SL testées en intrabar** high/low sur
-  chaque bougie suivante — stop supposé prioritaire si les deux sont dans
-  la même bougie —, **clôture forcée à la dernière bougie de la semaine
-  ISO** (jamais de portage week-end), liquidation en fin de période,
-  courbe d'équité ≤ 500 points). Les barrières transitent par le domaine :
+  gain, drawdown max **+ Sharpe / SQN / profit factor**), courbe d'équité
+  (Chart.js) et table des trades.
+  Moteur : `pyea/backtest/backtest_engine.py` — **adossé à backtrader**
+  (moteur événementiel éprouvé, GPLv3, pur Python, **vendorisé dans
+  `lib/backtrader/`**, zéro install). L'`BacktestEngine`/`BacktestResult`
+  restent le contrat public ; en interne le **flux PyEA est préservé**
+  (`Strategy → Signal → RiskManager → OrderRequest` DANS le callback par
+  bougie), backtrader ne fait QUE l'exécution + la comptabilité + les
+  métriques. Modèle (fidèle à l'ancien moteur maison, vérifié bougie à
+  bougie — mêmes valeurs de tests) : entrée Market en **cheat-on-close**
+  (décision remplie au bid_close), **barrières TP/SL = ordres Stop (SL) +
+  Limit (TP) natifs OCO** au prix exact, **stop prioritaire** si les deux
+  franchies dans la même bougie (natif backtrader), **clôture forcée fin de
+  semaine ISO** + liquidation finale via ordres Market, courbe d'équité
+  ≤ 500 points. Détails : on ne trade qu'**1 unité** nominale, le P&L
+  linéaire est re-scalé par `max_position_size` (Sharpe/SQN invariants
+  d'échelle) ; `Open` synthétisé = close précédent borné [low,high] (marché
+  continu sans gap) ; une **bougie « fantôme »** (copie de la dernière)
+  permet aux clôtures cheat-on-close du dernier bar de se réaliser ; méthodes
+  async de la stratégie pontées sur une boucle asyncio dédiée (`engine.run`
+  est désormais **synchrone**). Les barrières transitent par le domaine :
   `Signal.stop_loss`/`take_profit` → RiskManager → `OrderRequest`. Frames
-  sans high/low (tests) : barrières neutralisées sur le close. Sur cette
+  sans high/low (tests) : high=low=close → barrières sur le close. Sur cette
   page, Couleuvre n'a pas de modèle chargé (aucun entraînement dans un run
   de backtest simple) → 0 trade honnête ; pour la voir trader, passer par
   la page Entraînement (walk-forward).
@@ -191,13 +207,20 @@ jamais commité — modèle dans `.env.example`).
   statut) avec artefacts dans `data/models/<run>/` (metadata.json +
   `model.txt`/`features.json` par pli). Hook `Strategy.train(frame, params)`
   au contrat (défaut no-op = non entraînable). L'UI met en avant
-  l'**out-of-sample** : cartes OOS, **courbe d'équité OOS**, table des plis
+  l'**out-of-sample** : cartes OOS (trades, P&L, taux de gain, drawdown max
+  **+ profit factor OOS agrégé**), **courbe d'équité OOS**, table des plis
   avec colonne **AUC IS** (in-sample) en regard du taux de gain OOS (écart =
-  surapprentissage), et **panneau « définition du modèle » en lecture
+  surapprentissage) **+ Sharpe / SQN par pli** (analyzers backtrader sur
+  chaque bloc OOS), et **panneau « définition du modèle » en lecture
   seule** (features/barrières/horizon/seuils, servi par
   `GET /api/training/definition/{strategy}` = source unique via
   `Strategy.model_definition()`). La page backtest garde un renvoi vers
-  cet onglet.
+  cet onglet. **Agrégation honnête** : le profit factor OOS **ET le taux de
+  gain OOS** sont recalculés depuis TOUS les trades OOS (gains bruts / pertes
+  brutes ; trades gagnants / total) — jamais une moyenne de ratios par pli
+  (une moyenne non pondérée donnerait le même poids à un pli de 2 trades qu'à
+  un pli de 200) ; Sharpe/SQN restent affichés **par pli** (pas d'agrégat
+  statistiquement douteux entre plis).
 - **Spécification de Couleuvre v0.1** fournie par l'utilisateur :
   `docs/strategie_couleuvre.md` (swing intra-semaine 2-5 j, triple
   barrier ATR, features prix/tendance/momentum/vol/calendrier, **un modèle
@@ -250,8 +273,24 @@ jamais commité — modèle dans `.env.example`).
   identique), `load_history` ne lit que les années de la période, le
   téléchargeur survit à une année en échec (résumé en fin de run), erreurs
   422 lisibles côté UI, `wss://` derrière HTTPS. 80 tests verts.
-- **Squelettes vides** (NotImplementedError) à développer plus tard :
-  `InteractiveBrokersGateway` (appels ib_async réels), `MarketDataFeed`.
+- **Deux brokers enregistrés, connexion + lecture de compte RÉELLES pour les
+  DEUX** : `InteractiveBrokersGateway` (ib_async, via TWS/IB Gateway) et
+  `MetaTraderGateway` (paquet `MetaTrader5`, attache à un terminal MT5).
+  **IB** : `connect` via `IB().connectAsync(host, port, clientId)` (aucun
+  login/mdp — TWS/IB Gateway authentifie), `disconnect`/`is_connected`
+  (`ib.isConnected()`), `get_positions` (`reqPositionsAsync` + P&L latent du
+  `portfolio()` par conId), `get_account_summary` (`accountSummaryAsync`,
+  tags NetLiquidation/TotalCashValue/FullMaintMarginReq/AvailableFunds/
+  UnrealizedPnL → equity/balance/margin/margin_free/profit). **MetaTrader** :
+  `initialize()`/`account_info()`/`positions_get()`. Les DEUX en **import
+  paresseux** (ni `ib_async` ni `MetaTrader5` en sandbox → 503 honnête
+  « installez … », jamais une fausse connexion) — **1er run réel à valider
+  chez l'utilisateur** (TWS ouvert + API socket activée pour IB ; terminal
+  MT5 pour MetaTrader), comme Dukascopy.
+- **Squelettes restants** (NotImplementedError) : le **routage d'ordres**
+  (`place_order`/`cancel_order`) et le **flux de prix** (`subscribe_market_data`)
+  des DEUX brokers — aucun appelant tant que le flux live n'est pas monté dans
+  `app_factory` — et `MarketDataFeed`. On ne simule surtout jamais un ordre.
 
 ## Points de vigilance (audit modularité 2026-07-18)
 
@@ -272,6 +311,205 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
    raccourci stratégie→broker, même « pour tester »).
 
 ## Journal de décisions
+
+- **2026-07-21** — **Câblage live, étape 1 : `InteractiveBrokersGateway.connect()`
+  implémentée** (demande utilisateur « attaque le câblage live : gateway IB
+  connect() »). Décisions et conséquences : (1) **Modèle calqué sur MetaTrader**
+  (cohérence) : cycle de vie + lecture de compte RÉELS, routage d'ordres + flux
+  de prix laissés en `NotImplementedError` (pas d'appelant tant que le flux live
+  n'est pas monté dans `app_factory` — on ne simule jamais un ordre). (2)
+  **Import paresseux de `ib_async`** (`_import_ib()` dans les méthodes) alors
+  qu'il est une dépendance dure (`requirements.txt`) : la sandbox de dev ne
+  l'a pas installé, la gateway doit quand même s'enregistrer et l'app démarrer
+  partout ; paquet absent → ImportError claire → **503 honnête** (« installez
+  ib_async »), jamais un import cassé au boot. (3) **Aucun login/mdp** (déjà
+  tranché) : `connectAsync(host, port, clientId, timeout=8, readonly=False)` —
+  TWS / IB Gateway (déjà logué) authentifie ; paper/live = port de config
+  (7497/7496). (4) **Lecture de compte** : `get_positions` via
+  `reqPositionsAsync` (quantité signée + avgCost) enrichi du **P&L latent** du
+  `portfolio()` indexé par `conId` (les positions IB ne le portent pas) ;
+  `get_account_summary` via `accountSummaryAsync`, tags IB mappés vers les
+  MÊMES clés que MT5 (equity/balance/margin/margin_free/profit) pour une lecture
+  homogène côté API/UI. (5) **Échec de connexion → `ConnectionError`** avec
+  message actionnable (TWS lancé ? API activée ? port ?) + `disconnect()`
+  défensif si le socket est resté ouvert → l'API le rend en **502** (déjà
+  géré par le endpoint). (6) **Non testable en live** (ni paquet ni terminal IB
+  en sandbox) — comme MT5/Dukascopy, **1er run réel à valider chez
+  l'utilisateur**. Tests ajoutés (pas de `pytest-asyncio` dans le projet →
+  `asyncio.run` dans des tests sync) : IB déconnectée ne ment pas (positions/
+  résumé vides), connexion sans paquet → ImportError « ib_async » ; le test API
+  qui attendait **501** (ancien squelette) devient l'invariant d'honnêteté
+  « 502 ou 503, jamais une fausse réussite ». `docs/architecture.md` mis à jour
+  (IB : connexion + lecture RÉELLES). **113 verts.** Reste : IB order routing +
+  feed, MT5 order routing + feed, `MarketDataFeed`, montage du flux live dans
+  `app_factory`.
+
+- **2026-07-21** — **Taux de gain OOS agrégé honnêtement** (suite directe de
+  la passe métriques : on finit d'appliquer au win_rate le principe déjà
+  imposé au profit factor). **Incohérence corrigée** :
+  `training_walkforward._report` calculait le taux de gain OOS comme une
+  **moyenne des taux par pli** (`sum(win_rates)/len(win_rates)`) — exactement
+  le « péché » qu'on refuse ailleurs — alors que le profit factor, juste au-
+  dessus, était déjà agrégé sur TOUS les trades. Une moyenne non pondérée
+  donne le même poids à un pli de 2 trades qu'à un pli de 200, et un pli sans
+  trade fausse le compte. Correctif : win_rate OOS = `trades gagnants / total`
+  sur `oos_trade_pnls` (déjà collecté pour le profit factor ; son cardinal
+  vaut exactement `trades` → même dénominateur partout). **Conséquences** :
+  (1) aucun changement de structure UI — la carte « taux de gain » et la
+  colonne **par pli** (légitime, exacte) restent ; seule la valeur agrégée
+  change. (2) La colonne persistée `oos_win_rate` (historique) stocke
+  désormais la valeur honnête — pas de migration (colonne existante). (3) 1
+  test ajouté (`test_win_rate_oos_pondere_par_le_nombre_de_trades` : plis
+  déséquilibrés 1 vs 100 trades → 51/101 ≈ 0,505, pas la moyenne 0,75).
+  Section « Agrégation honnête » de l'état projet mise à jour. **111 verts.**
+
+- **2026-07-21** — **Profit factor OOS ajouté à l'historique des runs**
+  (demande utilisateur, suite directe de la passe métriques). La carte
+  « Profit factor OOS » existait déjà sur la page, mais la table
+  **Historique des entraînements** (persistée) n'affichait pas cette
+  métrique. Ajouts : (1) colonne `oos_profit_factor` (nullable) sur le
+  modèle `TrainingRun`, alimentée par `finish_run` (depuis
+  `oos_stats["profit_factor"]`, déjà calculé honnêtement dans
+  `training_walkforward._report` = gains bruts / pertes brutes sur TOUS les
+  trades OOS) et exposée par `list_runs`. (2) Colonne « Profit factor » dans
+  `training.html` + rendu dans `training.js` (`num2`, colspan 9→10).
+  (3) **Conséquence de fond traitée — micro-migration SQLite** :
+  `create_all` n'altère jamais une table existante, donc une base d'une
+  version antérieure aurait fait planter TOUT `select(TrainingRun)` sur
+  « no such column: oos_profit_factor ». `init_db()` appelle désormais
+  `_add_missing_columns()` : pour SQLite, il compare les colonnes des
+  modèles aux tables réelles et `ALTER TABLE ... ADD COLUMN` les colonnes
+  **nullable** manquantes (ajout sûr, NULL sur l'existant) — rattrapage
+  idempotent qui couvre aussi tout futur ajout de champ nullable ; sur un
+  vrai SGBD (Postgres) on passera par de vraies migrations (no-op ici).
+  2 tests ajoutés (migration + persistance du profit factor), **110 verts**.
+
+- **2026-07-21** — **Métriques backtrader portées sur la page Entraînement**
+  (demande utilisateur, suite du swap moteur). La page Live/Backtest exposait
+  déjà Sharpe/SQN/profit factor ; l'Entraînement (walk-forward OOS) n'affichait
+  que P&L / taux de gain / drawdown. Ajouts, **avec un souci d'agrégation
+  honnête** (c'est le sens de cette page) : (1) **carte « Profit factor OOS »**
+  = recalculée dans `training_walkforward._report` depuis TOUS les trades OOS
+  (`gross_profit / gross_loss`) — la seule agrégation correcte ; on refuse
+  explicitement de moyenner les profit factors par pli (mathématiquement faux).
+  Les P&L de trade sont collectés dans la boucle (`oos_trade_pnls`) et passés à
+  `_report`. (2) **Colonnes Sharpe / SQN PAR PLI** dans la table walk-forward,
+  lues directement du `test_stats` de chaque pli (valeur réelle de l'analyzer
+  backtrader sur ce bloc OOS) — **volontairement pas d'agrégat Sharpe/SQN
+  inter-plis** : un Sharpe est fonction de la série de rendements d'un pli, le
+  concaténer entre plis (offsets, granularité perdue) donnerait un chiffre
+  trompeur ; par pli, chacun est exact et sert de diagnostic (comme l'AUC IS).
+  Conséquences : `oos_stats` gagne la clé `profit_factor` (2 tests d'égalité
+  d'ensemble de clés mis à jour + 1 assertion « présent, None sans trade »),
+  `training.js` (carte + colonnes + helper `num2`), `training.html` (en-têtes
+  Sharpe/SQN). **108 tests toujours verts**, JS syntaxiquement validé.
+
+- **2026-07-20** — **Moteur de backtest maison remplacé par backtrader**
+  (demande utilisateur : « mettre en place un moteur de backtest déjà
+  existant, solide »). Sauvegarde préalable dans la branche
+  `before_backtrade_api` (poussée). Cheminement (l'utilisateur a changé
+  d'option plusieurs fois, chaque étape tranchée par un PROTOTYPE avant
+  d'écrire — leçon Dukascopy « ne jamais livrer un moteur non validé ») :
+  (1) **vectorbt écarté** : ré-écriture vectorielle contournerait le
+  RiskManager (viole la règle #1) ET — surtout — **non vendorisable** :
+  `numba`/`llvmlite` sont des binaires natifs spécifiques OS/Python
+  (impossible à déposer dans `lib/` cross-plateforme), et il ré-introduit
+  `scikit-learn` qu'on avait retiré exprès. (2) **backtesting.py écarté**
+  (prototypé) : remplit TOUJOURS à la bougie SUIVANTE → la validation des
+  barrières **crashe** (SL passé du mauvais côté du fill différé) et la
+  clôture « jamais de week-end » devient impossible (fill lundi). (3)
+  **backtrader retenu** : pur Python (**vendorisé dans `lib/backtrader/`**,
+  zéro install, hors-ligne — répond à la contrainte utilisateur « libs dans
+  le projet » et à la fragilité d'install Windows connue), et son mode
+  **cheat-on-close** remplit au close de décision = modèle PyEA. GPLv3 :
+  aucune obligation tant que PyEA n'est pas distribué (perso/VPS = OK) —
+  consigné. (4) **Design validé bougie à bougie par prototypes** : entrée
+  Market (coc) + barrières **Stop/Limit natifs OCO** au prix exact (fill
+  exact, tie-break stop natif), clôture forcée week-end/finale via ordres
+  Market, **bougie fantôme** (copie de la dernière) pour réaliser les
+  clôtures coc du dernier bar, enregistrement des trades via `notify_trade`
+  (net, robuste au transient coc). On ne trade qu'**1 unité**, P&L re-scalé
+  par `max_position_size` (ratios invariants d'échelle). **Le flux PyEA est
+  préservé** (Strategy→Signal→RiskManager→OrderRequest dans le callback) —
+  la règle #1 n'est PAS assouplie, contrairement à ce qu'aurait imposé
+  vectorbt. (5) **Conséquences traitées** : `BacktestEngine.run` devient
+  **synchrone** (backtrader l'est ; méthodes async de la stratégie pontées
+  sur une boucle dédiée) → appelants adaptés (`api_backtest.py`,
+  `training_walkforward.py`, plus d'`asyncio.run(engine.run)`) ;
+  `sys.path` préfixé de `lib/` dans `pyea/__init__.py` ; `requirements.txt`
+  documente le vendoring (backtrader NON listé en pip) ;
+  `docs/architecture.md` (+ `lib/`, arbo) et `docs/choix_techniques.md`
+  (justification) mis à jour. (6) **Nouvelles métriques** exposées par
+  l'API et la page backtest : **Sharpe** (riskfreerate=0 pour rester
+  invariant d'échelle, sinon le taux dominait le rendement ~0 sur 1 unité),
+  **SQN**, **profit factor**, avg/best/worst trade. Le « drawdown % » de
+  backtrader **écarté** (dilué par le capital nominal → trompeur), seul le
+  drawdown ABSOLU (courbe re-scalée) est gardé. (7) **Fidélité prouvée** :
+  les 10 tests moteur passent avec les **mêmes valeurs** que l'ancien moteur
+  (entrée au close, barrières exactes, tie-break, clôture week-end,
+  liquidation) ; test anti-fuite Couleuvre toujours ~50 % OOS sur bruit
+  (aucune fuite introduite) ; +1 test « métriques avancées ». Validé
+  end-to-end (Couleuvre entraînée → backtest OOS : Sharpe 1.79, SQN 0.95,
+  profit factor 1.10) et au navigateur (page backtest, 8 cartes, zéro
+  erreur console). **108 tests verts.** Reste inchangé : gateway IB +
+  feed live.
+
+- **2026-07-20** — **MetaTrader 5 ajouté comme second broker** (demande
+  utilisateur : « ajoute metatrader comme logiciel reliable à PyEA » +
+  « liste déroulante pour choisir le courtier »). Décisions et conséquences :
+  (1) **Nouvelle gateway** `brokers/broker_metatrader.py` (`MetaTraderGateway`,
+  nom `metatrader5`, paquet officiel `MetaTrader5`) — **import paresseux**
+  (dans les méthodes) : le paquet est Windows-only et absent de la sandbox,
+  la gateway doit quand même s'enregistrer et l'app démarrer partout (même
+  logique que le téléchargeur Dukascopy). (2) **Même modèle d'authentification
+  qu'IB, tranché pour rester cohérent avec « pas de login/mdp dans PyEA »** :
+  PyEA **s'attache** à un terminal MT5 déjà lancé et connecté (démo/réel choisi
+  DANS le terminal) via `MetaTrader5.initialize()` — aucun identifiant saisi
+  dans PyEA. Conséquence assumée : `broker_credentials.py` reste inutilisé (ni
+  IB ni MT5 n'en ont besoin) ; `trading_mode` de config **ne pilote pas** le
+  démo/réel de MT5 (signalé dans la fenêtre). (3) **Connexion + lecture de
+  compte RÉELLES** pour MT5 (`connect`/`disconnect`/`is_connected`/
+  `get_positions`/`get_account_summary`) — read-only, sûr à écrire sans test ;
+  **routage d'ordres et flux de prix laissés en `NotImplementedError`** (comme
+  IB : aucun appelant tant que le flux live n'est pas monté — on ne simule
+  jamais un ordre). Paquet absent → **503 honnête** (« installez MetaTrader5 »),
+  jamais de fausse connexion. **1er run réel à valider chez l'utilisateur.**
+  (4) **Liste déroulante** de choix du broker : contrat `BrokerGateway` enrichi
+  (`label`, `connection_info()`, `connection_hint()` par broker → fenêtre
+  générique, plus de champs host/port codés en dur) + `list_gateways()` au
+  registre ; `broker_runtime` gère le **broker actif** et sa **bascule runtime**
+  (`select()`, refusée si connecté — un seul compte à la fois ; la config
+  `broker.name` reste le défaut au démarrage et n'est pas réécrite). (5) **API**
+  : `GET /api/broker` (singulier) → **`GET /api/brokers`** (liste + params/état
+  de chacun) ; `POST /api/broker/connect` accepte `{broker}` (sélection avant
+  connexion, 404 si inconnu, 409 si bascule à chaud sur connexion vivante) ;
+  `/api/status.broker` = broker ACTIF réel (pas la config brute). (6) **Front**
+  : `<select>` peuplé par `/api/brokers`, paramètres + note reconstruits par
+  broker, un seul JS (`charts.js`). Conséquences traitées : `config.yaml`
+  (brokers dispo + note MT5), `.env.example` (`MT5_TERMINAL_PATH` optionnel,
+  commenté — aucun secret), `config_settings.py` (`mt5_terminal_path`),
+  `docs/architecture.md` (arbo brokers + `/api/brokers`). Validé au navigateur
+  (Playwright : dropdown, params/note dynamiques, 503 honnête sur MT5, badge
+  header reflétant le broker actif, zéro fausse connexion). Tests : 1 test IB
+  d'info remplacé par la liste + 2 tests MT5 (503 sans paquet, broker inconnu),
+  **107 verts**. Reste : IB `connect()` (ib_async), routage d'ordres + feed
+  live des deux brokers.
+
+- **2026-07-20** — **Fenêtre broker : login/mdp retirés** (l'utilisateur a
+  tranché après clarification). L'API Interactive Brokers **ne
+  s'authentifie pas par identifiants** : c'est TWS / IB Gateway (déjà
+  logué) qui gère le compte ; PyEA se connecte au socket API via
+  host/port/client_id. Conséquences : la modale « Identifiants » devient
+  une fenêtre de **Connexion** (host/port/client_id/mode en lecture seule +
+  Se connecter/déconnecter + état) ; endpoints `GET/PUT/DELETE
+  /api/broker/credentials` **supprimés**, remplacés par `GET /api/broker`
+  (infos) ; `broker_credentials_set` retiré de `/api/status` ; la gateway
+  IB ne lit plus `broker_credentials.password`. Le module
+  `broker_credentials.py` est **conservé en code** (réservé à un futur
+  broker qui, lui, aurait besoin d'identifiants) mais n'est plus câblé.
+  6 tests credentials retirés, 1 test `/api/broker` ajouté, 105 verts.
+  Validé au navigateur (fenêtre sans champ login/mdp, host:port affichés,
+  connexion → 501 honnête).
 
 - **2026-07-20** — **Passe « honnêteté de l'interface »** (demande
   utilisateur après usage réel : « je ne veux pas de mensonges dans mon

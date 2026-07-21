@@ -116,12 +116,18 @@ function renderResults(result) {
   const results = document.getElementById("bt-results");
   results.classList.remove("hidden");
   results.classList.add("flex");
+  const pct1 = (v) => (v === null || v === undefined ? null : `${(v * 100).toFixed(1)} %`);
+  const num2 = (v) => (v === null || v === undefined ? null : v.toFixed(2));
   document.getElementById("bt-stats").innerHTML =
     statCard("Bougies", stats.bars) +
     statCard("Trades", stats.trades) +
     statCard("P&L total", stats.total_pnl, true) +
-    statCard("Taux de gain", stats.win_rate === null ? null : `${(stats.win_rate * 100).toFixed(1)} %`) +
-    statCard("Drawdown max", stats.max_drawdown);
+    statCard("Taux de gain", pct1(stats.win_rate)) +
+    statCard("Drawdown max", stats.max_drawdown) +
+    // Métriques fournies par backtrader (moteur d'exécution).
+    statCard("Sharpe", num2(stats.sharpe_ratio)) +
+    statCard("SQN", num2(stats.sqn)) +
+    statCard("Profit factor", num2(stats.profit_factor));
 
   if (equityChart) equityChart.destroy();
   equityChart = new Chart(document.getElementById("bt-equity"), {
