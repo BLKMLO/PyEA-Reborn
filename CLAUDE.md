@@ -215,10 +215,12 @@ jamais commité — modèle dans `.env.example`).
   seule** (features/barrières/horizon/seuils, servi par
   `GET /api/training/definition/{strategy}` = source unique via
   `Strategy.model_definition()`). La page backtest garde un renvoi vers
-  cet onglet. **Agrégation honnête** : le profit factor OOS est recalculé
-  depuis TOUS les trades OOS (gains bruts / pertes brutes) — jamais une
-  moyenne de ratios par pli ; Sharpe/SQN restent affichés **par pli** (pas
-  d'agrégat statistiquement douteux entre plis).
+  cet onglet. **Agrégation honnête** : le profit factor OOS **ET le taux de
+  gain OOS** sont recalculés depuis TOUS les trades OOS (gains bruts / pertes
+  brutes ; trades gagnants / total) — jamais une moyenne de ratios par pli
+  (une moyenne non pondérée donnerait le même poids à un pli de 2 trades qu'à
+  un pli de 200) ; Sharpe/SQN restent affichés **par pli** (pas d'agrégat
+  statistiquement douteux entre plis).
 - **Spécification de Couleuvre v0.1** fournie par l'utilisateur :
   `docs/strategie_couleuvre.md` (swing intra-semaine 2-5 j, triple
   barrier ATR, features prix/tendance/momentum/vol/calendrier, **un modèle
@@ -303,6 +305,25 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
    raccourci stratégie→broker, même « pour tester »).
 
 ## Journal de décisions
+
+- **2026-07-21** — **Taux de gain OOS agrégé honnêtement** (suite directe de
+  la passe métriques : on finit d'appliquer au win_rate le principe déjà
+  imposé au profit factor). **Incohérence corrigée** :
+  `training_walkforward._report` calculait le taux de gain OOS comme une
+  **moyenne des taux par pli** (`sum(win_rates)/len(win_rates)`) — exactement
+  le « péché » qu'on refuse ailleurs — alors que le profit factor, juste au-
+  dessus, était déjà agrégé sur TOUS les trades. Une moyenne non pondérée
+  donne le même poids à un pli de 2 trades qu'à un pli de 200, et un pli sans
+  trade fausse le compte. Correctif : win_rate OOS = `trades gagnants / total`
+  sur `oos_trade_pnls` (déjà collecté pour le profit factor ; son cardinal
+  vaut exactement `trades` → même dénominateur partout). **Conséquences** :
+  (1) aucun changement de structure UI — la carte « taux de gain » et la
+  colonne **par pli** (légitime, exacte) restent ; seule la valeur agrégée
+  change. (2) La colonne persistée `oos_win_rate` (historique) stocke
+  désormais la valeur honnête — pas de migration (colonne existante). (3) 1
+  test ajouté (`test_win_rate_oos_pondere_par_le_nombre_de_trades` : plis
+  déséquilibrés 1 vs 100 trades → 51/101 ≈ 0,505, pas la moyenne 0,75).
+  Section « Agrégation honnête » de l'état projet mise à jour. **111 verts.**
 
 - **2026-07-21** — **Profit factor OOS ajouté à l'historique des runs**
   (demande utilisateur, suite directe de la passe métriques). La carte

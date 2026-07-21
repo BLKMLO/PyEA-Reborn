@@ -166,18 +166,18 @@ def _report(
 ) -> dict[str, Any]:
     trades = sum(fold.test_stats.get("trades", 0) for fold in folds)
     total_pnl = round(sum(fold.test_stats.get("total_pnl", 0.0) for fold in folds), 5)
-    win_rates = [
-        fold.test_stats["win_rate"]
-        for fold in folds
-        if fold.test_stats.get("win_rate") is not None
-    ]
     equity_values = [point["equity"] for point in oos_equity]
     max_drawdown, peak = 0.0, float("-inf")
     for value in equity_values:
         peak = max(peak, value)
         max_drawdown = max(max_drawdown, peak - value)
-    # Profit factor agrégé sur TOUS les trades OOS : la seule agrégation
-    # correcte (gains bruts / pertes brutes), pas une moyenne de ratios.
+    # Taux de gain ET profit factor agrégés sur TOUS les trades OOS : la seule
+    # agrégation correcte. On ne moyenne JAMAIS les ratios par pli — une moyenne
+    # non pondérée donnerait le même poids à un pli de 2 trades qu'à un pli de
+    # 200, et un pli sans trade fausserait le compte. (``oos_trade_pnls`` couvre
+    # tous les plis ; son cardinal vaut ``trades``, même dénominateur partout.)
+    oos_wins = sum(1 for pnl in oos_trade_pnls if pnl > 0)
+    win_rate = round(oos_wins / len(oos_trade_pnls), 4) if oos_trade_pnls else None
     gross_profit = sum(pnl for pnl in oos_trade_pnls if pnl > 0)
     gross_loss = -sum(pnl for pnl in oos_trade_pnls if pnl < 0)
     profit_factor = round(gross_profit / gross_loss, 4) if gross_loss > 0 else None
@@ -189,7 +189,7 @@ def _report(
         "oos_stats": {
             "trades": trades,
             "total_pnl": total_pnl,
-            "win_rate": round(sum(win_rates) / len(win_rates), 4) if win_rates else None,
+            "win_rate": win_rate,
             "max_drawdown": round(max_drawdown, 5),
             "profit_factor": profit_factor,
         },
