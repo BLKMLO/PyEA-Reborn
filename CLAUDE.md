@@ -287,10 +287,35 @@ jamais commité — modèle dans `.env.example`).
   « installez … », jamais une fausse connexion) — **1er run réel à valider
   chez l'utilisateur** (TWS ouvert + API socket activée pour IB ; terminal
   MT5 pour MetaTrader), comme Dukascopy.
+- **Flux live monté (backbone) — `pyea/live/`** : `MarketDataFeed`
+  (`data_market_feed.py`, désormais **implémenté** et agnostique du broker :
+  il délègue à `gateway.subscribe_market_data` et relaie chaque tick sur le
+  bus `market.tick`), **`LiveTradingEngine`** (`live/live_engine.py` : abonné
+  au bus, il applique le flux strict `Strategy → Signal → RiskManager →
+  OrderRequest → BrokerGateway`, une stratégie par symbole) et **`LiveRuntime`**
+  (`live/live_runtime.py`, singleton du même statut que `broker_runtime` :
+  assemble feed + moteur, **démarré à la connexion broker** / arrêté à la
+  déconnexion — câblé dans `app_factory.lifespan` + endpoints
+  `/api/broker/connect|disconnect`). **Trois garde-fous d'honnêteté** : le
+  moteur ne trade un symbole que si le kill-switch global `strategy.enabled`
+  est ON, la paire est **armée** (SQLite) ET le broker est **connecté** ; il
+  s'arrête à `place_order` (soumission) et ne fabrique JAMAIS de fill (la
+  journalisation du trade rempli viendra des callbacks d'exécution de la
+  gateway). Un broker dont le routage/flux n'est pas câblé
+  (`NotImplementedError`) est journalisé honnêtement, sans crash ni ordre
+  simulé. Testé de bout en bout avec un faux broker (10 tests : relais de
+  ticks, gating armé/connecté/kill-switch, ordre non routé sans fill,
+  consommation via le bus). **Couleuvre en live reste muette** tant que la
+  sélection de modèle live n'est pas câblée (son `on_tick` est indexé par
+  bougie — inférence live tick→bougie = suite) : montage warmup `{}` → aucun
+  ordre, honnête. Une stratégie non-ML traderait normalement à travers ce flux.
 - **Squelettes restants** (NotImplementedError) : le **routage d'ordres**
   (`place_order`/`cancel_order`) et le **flux de prix** (`subscribe_market_data`)
-  des DEUX brokers — aucun appelant tant que le flux live n'est pas monté dans
-  `app_factory` — et `MarketDataFeed`. On ne simule surtout jamais un ordre.
+  des DEUX brokers (IB : bracket ib_async + `reqMktData` ; MT5 : `order_send` +
+  ticks) — ils ont DÉSORMAIS un appelant (le backbone live ci-dessus), mais
+  restent à câbler + valider chez l'utilisateur (comme `connect()`). On ne
+  simule surtout jamais un ordre. **Inférence live de Couleuvre** (agrégation
+  tick→bougie + sélection du modèle par actif) : à concevoir.
 
 ## Points de vigilance (audit modularité 2026-07-18)
 
@@ -305,12 +330,61 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
 2. ~~`/api/status` code en dur `broker_connected: False`~~ **RÉSOLU
    (2026-07-20)** : gateway instanciée dans le `lifespan`, exposée par le
    singleton `broker_runtime` ; `/api/status` lit `is_connected()` réel.
-3. Le `lifespan` de `app_factory` ne monte pas encore gateway + stratégie
-   + feed : c'est au premier câblage complet que le flux
-   `Signal → RiskManager → OrderRequest` devra être imposé (aucun
-   raccourci stratégie→broker, même « pour tester »).
+3. ~~Le `lifespan` de `app_factory` ne monte pas gateway + stratégie +
+   feed~~ **RÉSOLU (2026-07-21)** : `app_factory` configure `live_runtime`
+   (feed + `LiveTradingEngine`), démarré à la connexion broker. Le flux
+   strict `Strategy → Signal → RiskManager → OrderRequest → BrokerGateway`
+   est imposé en live comme en backtest (aucun raccourci stratégie→broker).
+   Reste à câbler : les feuilles broker (order routing + flux de prix IB/MT5)
+   et l'inférence live de Couleuvre.
 
 ## Journal de décisions
+
+- **2026-07-21** — **Câblage live, étape 2 : montage du flux (backbone
+  d'orchestration)** (demande utilisateur « continue sur le flux live »).
+  C'est la résolution du point de vigilance n°3 (le `lifespan` ne montait pas
+  le flux). Décisions et conséquences : (1) **Nouveau package `pyea/live/`**
+  (pendant live de `pyea/backtest/`, préfixe `live_`) : `live_engine.py`
+  (`LiveTradingEngine`) + `live_runtime.py` (singleton `LiveRuntime`). Refusé
+  de mettre l'orchestrateur dans `core/` (core est bas niveau : domaine, bus,
+  logging ; il n'importe ni stratégie ni broker). (2) **`MarketDataFeed`
+  implémenté** (était un squelette) **agnostique du broker** : il délègue à
+  `gateway.subscribe_market_data(symbol, on_tick)` et republie chaque tick sur
+  le bus `market.tick` (dict, convention du bus) — testable avec un faux
+  broker, sans terminal réel. Une souscription par symbole qui échoue est
+  sautée ; un broker au flux non câblé (`NotImplementedError`) interrompt le
+  démarrage SANS fabriquer de tick. (3) **`LiveTradingEngine` = CONSOMMATEUR
+  du bus** (règle #3 : découplage — il ne connaît ni le feed ni le broker
+  concret, comme le relais WebSocket) : sur chaque tick, flux strict
+  `Strategy → Signal → RiskManager → OrderRequest → BrokerGateway`, **une
+  stratégie par symbole** (un modèle par actif). **Trois garde-fous
+  d'honnêteté** avant tout trade : kill-switch global `strategy.enabled` ON +
+  paire **armée** (SQLite `is_trading_enabled`) + broker **connecté**
+  (`connected_gateway()` renvoie None sinon). Dépendances **injectées par
+  callables** (gateway/enabled/armed) → moteur testable sans les singletons.
+  (4) **On ne fabrique JAMAIS de fill** : le moteur s'arrête à `place_order`
+  (soumission) ; la journalisation du trade rempli (`record_trade`) viendra
+  des callbacks d'exécution de la gateway (routage à câbler). `place_order`
+  non câblé (`NotImplementedError`) → log honnête, signal quand même émis,
+  aucun ordre routé, aucun crash. (5) **`LiveRuntime` piloté par la connexion
+  broker** : câblé dans `app_factory.lifespan` (`configure`) et démarré/arrêté
+  par les endpoints `/api/broker/connect|disconnect` (le flux n'a de sens que
+  broker connecté). Un échec de démarrage du flux **n'invalide pas** la
+  connexion déjà établie (try/except + log). Feed subscribe à
+  `history_instruments` (la watchlist affichée) ; le gating par paire armée se
+  fait dans le moteur. (6) **Couleuvre en live reste muette** : son `on_tick`
+  est indexé par timestamp de bougie (conçu pour le backtest), et la sélection
+  du modèle live par actif n'est pas câblée → montage warmup `{}` → proba None
+  → aucun ordre (honnête, pas un crash : `on_tick` capture le `KeyError`). Une
+  stratégie non-ML traderait normalement. L'**inférence live de Couleuvre**
+  (agrégation tick→bougie + chargement du modèle par actif) est la prochaine
+  brique. (7) **Tests** : 10 ajoutés (feed : relais/stop/flux-non-câblé ;
+  moteur : flux complet avec barrières via RiskManager, gating armé/kill-switch/
+  déconnecté, `place_order` non câblé sans fill, stratégie muette, consommation
+  via le bus) — faux broker + stratégie de test, jamais un vrai terminal.
+  `docs/architecture.md` (arbo `live/`, règle #1 « imposée en live aussi ») et
+  ce fichier mis à jour. **123 verts.** Reste : feuilles broker (order routing
+  + flux de prix IB/MT5) et inférence live de Couleuvre.
 
 - **2026-07-21** — **Câblage live, étape 1 : `InteractiveBrokersGateway.connect()`
   implémentée** (demande utilisateur « attaque le câblage live : gateway IB

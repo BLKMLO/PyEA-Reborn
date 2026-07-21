@@ -19,6 +19,7 @@ from pyea.brokers import get_gateway
 from pyea.brokers.broker_runtime import broker_runtime
 from pyea.config.config_settings import get_settings
 from pyea.core.core_logging import get_logger, setup_logging
+from pyea.live.live_runtime import live_runtime
 from pyea.storage.storage_database import init_db
 from pyea.storage.storage_training_runs import fail_orphan_runs
 
@@ -41,15 +42,17 @@ async def lifespan(app: FastAPI):
     # action explicite de l'utilisateur). L'API lit son état via broker_runtime
     # — plus jamais de broker_connected codé en dur.
     broker_runtime.set_gateway(get_gateway(settings.broker_name)(settings))
+    # Flux live (feed + moteur) assemblé ici, DÉMARRÉ à la connexion broker
+    # (endpoint /api/broker/connect) — le flux n'a de sens que broker connecté.
+    live_runtime.configure(settings)
     logger.info(
         "PyEA démarré — broker=%s mode=%s stratégie=%s",
         settings.broker_name,
         settings.trading_mode,
         settings.strategy_name,
     )
-    # Plus tard : monter la stratégie active et le MarketDataFeed ici, et les
-    # arrêter proprement après le yield.
     yield
+    await live_runtime.stop()
     await broker_runtime.disconnect()
     logger.info("PyEA arrêté.")
 
