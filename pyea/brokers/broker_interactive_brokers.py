@@ -18,17 +18,24 @@ cassé au démarrage. Comme pour MetaTrader et Dukascopy, **le premier run
 réel (TWS ouvert, API activée) est à valider chez l'utilisateur** : la
 sandbox n'a ni le paquet ni un terminal IB.
 
-Livrés ici : cycle de vie (``connect``/``disconnect``/``is_connected``) et
-lecture de compte (``get_positions``/``get_account_summary``) — tous
-read-only, sûrs à écrire sans test live. Le **routage d'ordres**
-(``place_order``/``cancel_order``) et le **flux de prix**
-(``subscribe_market_data``) restent en ``NotImplementedError`` tant que le
-flux live n'est pas monté dans ``app_factory`` — on ne simule jamais un
-envoi d'ordre.
+Livrés ici : cycle de vie (``connect``/``disconnect``/``is_connected``),
+lecture de compte (``get_positions``/``get_account_summary``), **routage
+d'ordres** (``place_order`` en bracket natif Market + TP/SL attachés OCO,
+``cancel_order``) et **flux de prix** (``subscribe_market_data`` via
+``reqMktData``). Comme la connexion, order routing et feed exigent un TWS /
+IB Gateway réel : ils sont écrits sur le même modèle prudent (import
+paresseux, échec honnête si déconnecté — jamais d'ordre ni de tick simulé)
+et **restent à valider chez l'utilisateur** au premier run réel. Les
+instruments supportés sont les paires **forex / métaux à 6 lettres**
+(EURUSD, XAUUSD…) ; les indices (US500) restent à câbler (contrat non
+forex) et sont signalés par une erreur claire.
 """
 
 from __future__ import annotations
 
+import asyncio
+import math
+from datetime import datetime, timezone
 from typing import Any
 
 from pyea.brokers.broker_gateway import (
@@ -37,7 +44,7 @@ from pyea.brokers.broker_gateway import (
     register_gateway,
 )
 from pyea.config.config_settings import Settings
-from pyea.core.core_domain import OrderRequest, Position
+from pyea.core.core_domain import OrderRequest, OrderSide, Position
 from pyea.core.core_logging import get_logger
 
 logger = get_logger(__name__)
@@ -57,17 +64,22 @@ _ACCOUNT_TAGS = {
 }
 
 
-def _import_ib() -> Any:
-    """Import paresseux du paquet ``ib_async`` avec message clair si absent."""
+def _import_ib_api() -> Any:
+    """Import paresseux du module ``ib_async`` avec message clair si absent."""
     try:
-        from ib_async import IB  # type: ignore
+        import ib_async  # type: ignore
     except ImportError as exc:  # pragma: no cover - dépend de l'install
         raise ImportError(
             "Le paquet 'ib_async' est requis pour se connecter à Interactive "
             "Brokers. Installez-le : pip install ib_async, puis lancez TWS ou "
             "IB Gateway avec l'API socket activée."
         ) from exc
-    return IB
+    return ib_async
+
+
+def _import_ib() -> Any:
+    """Classe ``IB`` du paquet ``ib_async`` (import paresseux)."""
+    return _import_ib_api().IB
 
 
 @register_gateway
@@ -80,6 +92,8 @@ class InteractiveBrokersGateway(BrokerGateway):
         self._port = settings.ib_port  # paper ou live selon trading_mode
         self._client_id = settings.ib_client_id
         self._ib: Any | None = None  # instance ib_async.IB une fois connectée
+        # Souscriptions de marché vivantes : symbole → (contrat, ticker, handler).
+        self._md: dict[str, tuple[Any, Any, Any]] = {}
 
     def connection_info(self) -> dict[str, str]:
         return {
@@ -130,8 +144,9 @@ class InteractiveBrokersGateway(BrokerGateway):
 
     async def disconnect(self) -> None:
         if self._ib is not None:
-            self._ib.disconnect()  # synchrone côté ib_async
+            self._ib.disconnect()  # synchrone côté ib_async : coupe tous les flux
             self._ib = None
+        self._md.clear()
 
     def is_connected(self) -> bool:
         if self._ib is None:
@@ -183,25 +198,141 @@ class InteractiveBrokersGateway(BrokerGateway):
                 continue
         return summary
 
-    # --- Routage d'ordres et flux de prix : câblage live à venir ---
-    # Comme pour MetaTrader, aucune de ces méthodes n'a d'appelant tant que le
-    # flux live (Strategy → RiskManager → BrokerGateway + MarketDataFeed) n'est
-    # pas monté dans app_factory. On ne simule surtout jamais un envoi d'ordre.
+    # --- Routage d'ordres ---
     async def place_order(self, order: OrderRequest) -> str:
-        raise NotImplementedError(
-            "Envoi d'ordre Interactive Brokers à câbler avec le flux live "
-            "(bracket ib_async : ordre parent + stop/limit attachés)."
+        """Envoie un ordre en **bracket natif** : entrée Market + TP/SL attachés.
+
+        Le parent est un ordre au marché (l'exécution immédiate en live est
+        l'équivalent de la décision à la clôture de bougie du backtest). Les
+        barrières triple-barrier (validées par le RiskManager) deviennent des
+        ordres enfants au MÊME ``parentId`` : TWS les groupe automatiquement en
+        OCA (le TP annule le SL et réciproquement). On ne simule jamais un
+        envoi : broker déconnecté → ``ConnectionError`` explicite.
+        """
+        if not self.is_connected():
+            raise ConnectionError(
+                "Interactive Brokers non connecté : impossible d'envoyer un ordre."
+            )
+        ib_api = _import_ib_api()
+        contract = await self._resolve_contract(order.symbol)
+        action = order.side.value  # "BUY" / "SELL"
+        reverse = "SELL" if order.side == OrderSide.BUY else "BUY"
+        quantity = abs(order.quantity)
+
+        parent = ib_api.MarketOrder(action, quantity)
+        parent.orderId = self._ib.client.getReqId()
+        parent.transmit = False
+        bracket = [parent]
+        if order.take_profit is not None:
+            bracket.append(
+                ib_api.LimitOrder(
+                    reverse, quantity, order.take_profit,
+                    orderId=self._ib.client.getReqId(),
+                    parentId=parent.orderId, transmit=False,
+                )
+            )
+        if order.stop_loss is not None:
+            bracket.append(
+                ib_api.StopOrder(
+                    reverse, quantity, order.stop_loss,
+                    orderId=self._ib.client.getReqId(),
+                    parentId=parent.orderId, transmit=False,
+                )
+            )
+        # Seul le DERNIER ordre porte transmit=True → envoi atomique du groupe.
+        bracket[-1].transmit = True
+        for child in bracket:
+            self._ib.placeOrder(contract, child)
+        logger.info(
+            "Ordre IB soumis — %s %s x%s (id %s)%s.",
+            action, order.symbol, quantity, parent.orderId,
+            " + TP/SL" if len(bracket) > 1 else "",
         )
+        return str(parent.orderId)
 
     async def cancel_order(self, order_id: str) -> None:
-        raise NotImplementedError(
-            "Annulation d'ordre Interactive Brokers à câbler avec le flux live."
+        if not self.is_connected():
+            raise ConnectionError(
+                "Interactive Brokers non connecté : impossible d'annuler un ordre."
+            )
+        try:
+            target = int(order_id)
+        except (TypeError, ValueError):
+            raise ValueError(f"Identifiant d'ordre IB invalide : {order_id!r}.")
+        for trade in self._ib.openTrades():
+            if trade.order.orderId == target:
+                self._ib.cancelOrder(trade.order)
+                logger.info("Ordre IB %s annulé.", order_id)
+                return
+        logger.warning(
+            "Ordre IB %s introuvable (déjà exécuté ou annulé ?).", order_id
         )
 
+    # --- Flux de prix ---
     async def subscribe_market_data(self, symbol: str, on_tick: TickCallback) -> None:
-        raise NotImplementedError(
-            "Flux de prix Interactive Brokers à câbler avec le MarketDataFeed live."
-        )
+        """S'abonne au flux de prix d'un symbole (``reqMktData``).
+
+        Le callback ib_async est SYNCHRONE (appelé dans la boucle asyncio) : on
+        y planifie ``on_tick`` (coroutine) sans bloquer le flux de ticks. Les
+        prix non prêts (NaN) sont ignorés — jamais de tick fabriqué.
+        """
+        if not self.is_connected():
+            raise ConnectionError(
+                "Interactive Brokers non connecté : flux de prix indisponible."
+            )
+        if symbol in self._md:
+            return  # déjà abonné
+        contract = await self._resolve_contract(symbol)
+        ticker = self._ib.reqMktData(contract, "", False, False)
+
+        def _handler(updated: Any) -> None:
+            price = updated.marketPrice()
+            if price is None or not math.isfinite(price):
+                return
+            volume = updated.volume
+            tick = TickData(
+                symbol=symbol,
+                price=float(price),
+                volume=float(volume) if volume and math.isfinite(volume) else None,
+                timestamp=updated.time or datetime.now(timezone.utc),
+            )
+            asyncio.ensure_future(on_tick(tick))
+
+        ticker.updateEvent += _handler
+        self._md[symbol] = (contract, ticker, _handler)
+        logger.info("Flux de marché IB abonné — %s.", symbol)
 
     async def unsubscribe_market_data(self, symbol: str) -> None:
-        raise NotImplementedError
+        entry = self._md.pop(symbol, None)
+        if entry is None:
+            return
+        contract, ticker, handler = entry
+        try:
+            ticker.updateEvent -= handler
+        except Exception:  # pragma: no cover - défensif (event déjà nettoyé)
+            pass
+        if self.is_connected():
+            self._ib.cancelMktData(contract)
+        logger.info("Flux de marché IB coupé — %s.", symbol)
+
+    async def _resolve_contract(self, symbol: str) -> Any:
+        """Résout un symbole en contrat IB qualifié.
+
+        Supporté pour l'instant : paires **forex / métaux à 6 lettres**
+        (EURUSD, XAUUSD…) via ``Forex``. Les indices (US500) et autres types
+        restent à câbler — erreur claire plutôt qu'un contrat deviné.
+        """
+        ib_api = _import_ib_api()
+        normalized = symbol.replace("/", "").upper()
+        if len(normalized) == 6 and normalized.isalpha():
+            contract = ib_api.Forex(normalized)
+        else:
+            raise ValueError(
+                f"Instrument « {symbol} » non supporté par la gateway IB pour "
+                "l'instant (paires forex/métaux à 6 lettres uniquement ; les "
+                "indices comme US500 restent à câbler)."
+            )
+        qualified = await self._ib.qualifyContractsAsync(contract)
+        if not qualified:
+            raise ValueError(f"Contrat IB non résolu pour « {symbol} ».")
+        return qualified[0]

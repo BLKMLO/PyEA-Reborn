@@ -287,6 +287,23 @@ jamais commité — modèle dans `.env.example`).
   « installez … », jamais une fausse connexion) — **1er run réel à valider
   chez l'utilisateur** (TWS ouvert + API socket activée pour IB ; terminal
   MT5 pour MetaTrader), comme Dukascopy.
+- **Interactive Brokers COMPLET (routage d'ordres + flux de prix livrés)** :
+  `place_order` = **bracket natif** (parent Market + `LimitOrder` TP +
+  `StopOrder` SL en enfants au même `parentId` → OCA automatique côté TWS,
+  seul le dernier ordre porte `transmit=True` = envoi atomique ; l'entrée
+  Market en live est l'équivalent de la décision cheat-on-close du backtest ;
+  les barrières triple-barrier validées par le RiskManager deviennent les
+  ordres attachés) ; `cancel_order` (recherche dans `openTrades()` →
+  `cancelOrder`) ; `subscribe_market_data` (`reqMktData`, handler ib_async
+  synchrone qui planifie le `on_tick` async sur la boucle, prix NaN ignorés =
+  aucun tick fabriqué) / `unsubscribe_market_data` (`cancelMktData`).
+  **Instruments supportés = forex/métaux à 6 lettres** (EURUSD, XAUUSD…) via
+  `Forex()` qualifié ; les indices (US500) lèvent une erreur claire (contrat
+  non forex, à câbler) — le `MarketDataFeed` saute alors ce symbole sans
+  couper les autres. Déconnecté → `ConnectionError` explicite (jamais un faux
+  id ni un tick simulé). **Écrit sans terminal (ib_async absent en sandbox) :
+  1er run réel à valider chez l'utilisateur**, comme `connect()`. Tests : 2
+  ajoutés (ordre + flux refusés honnêtement hors connexion).
 - **Flux live monté (backbone) — `pyea/live/`** : `MarketDataFeed`
   (`data_market_feed.py`, désormais **implémenté** et agnostique du broker :
   il délègue à `gateway.subscribe_market_data` et relaie chaque tick sur le
@@ -311,11 +328,11 @@ jamais commité — modèle dans `.env.example`).
   ordre, honnête. Une stratégie non-ML traderait normalement à travers ce flux.
 - **Squelettes restants** (NotImplementedError) : le **routage d'ordres**
   (`place_order`/`cancel_order`) et le **flux de prix** (`subscribe_market_data`)
-  des DEUX brokers (IB : bracket ib_async + `reqMktData` ; MT5 : `order_send` +
-  ticks) — ils ont DÉSORMAIS un appelant (le backbone live ci-dessus), mais
-  restent à câbler + valider chez l'utilisateur (comme `connect()`). On ne
-  simule surtout jamais un ordre. **Inférence live de Couleuvre** (agrégation
-  tick→bougie + sélection du modèle par actif) : à concevoir.
+  de **MetaTrader 5** uniquement (`order_send` + ticks) — IB est désormais
+  COMPLET (cf. ci-dessus). Ils ont un appelant (le backbone live), restent à
+  câbler + valider chez l'utilisateur. On ne simule surtout jamais un ordre.
+  **Inférence live de Couleuvre** (agrégation tick→bougie + sélection du modèle
+  par actif) : à concevoir.
 
 ## Points de vigilance (audit modularité 2026-07-18)
 
@@ -339,6 +356,40 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
    et l'inférence live de Couleuvre.
 
 ## Journal de décisions
+
+- **2026-07-21** — **Câblage live, étape 3 : Interactive Brokers COMPLET**
+  (demande utilisateur « finis tout ce qui concerne IB d'abord »). Après le
+  backbone (étape 2), on finit les feuilles broker d'IB — désormais appelées
+  par le `LiveTradingEngine`. Décisions et conséquences : (1) **`place_order`
+  = bracket natif** (pas d'ordre plat) : parent `MarketOrder` (entrée immédiate
+  = équivalent live de la décision cheat-on-close du backtest) + enfants
+  `LimitOrder` (TP) / `StopOrder` (SL) au même `parentId` → **OCA automatique
+  côté TWS** (l'un annule l'autre), `transmit=True` sur le seul dernier ordre =
+  envoi atomique du groupe. Les barrières triple-barrier (déjà portées par
+  `OrderRequest` via le RiskManager) deviennent ces ordres attachés — cohérent
+  avec le modèle backtest (barrières = ordres bracket validés à l'entrée, pas
+  un contournement du risque). Sans barrière → simple Market. (2)
+  **`cancel_order`** : recherche dans `openTrades()` par `orderId` →
+  `cancelOrder` ; ordre introuvable = log, pas d'erreur (déjà exécuté/annulé).
+  (3) **`subscribe_market_data`** (`reqMktData`) : le callback ib_async est
+  **synchrone** (appelé dans la boucle asyncio) → on y planifie le `on_tick`
+  async via `asyncio.ensure_future` (ne bloque pas le flux) ; **prix NaN
+  ignorés** (ticker pas prêt) = jamais de tick fabriqué ;
+  `unsubscribe_market_data` = `cancelMktData` + retrait du handler + nettoyé à
+  `disconnect`. (4) **Résolution de contrat** : `Forex()` qualifié pour les
+  symboles **6 lettres alpha** (28 paires forex + XAUUSD/XAGUSD, traités comme
+  forex chez IB) ; **US500** (indice, non-forex) lève une `ValueError` claire
+  → le `MarketDataFeed` saute ce symbole (Exception générique = skip) sans
+  couper les autres. Câbler les indices = étape ultérieure (secType différent).
+  (5) **Import paresseux étendu** : `_import_ib_api()` (module entier, pour
+  `MarketOrder`/`LimitOrder`/`StopOrder`/`Forex`), `_import_ib()` en dérive.
+  (6) **Honnêteté maintenue** : toute méthode appelée déconnectée lève
+  `ConnectionError` explicite AVANT tout import (jamais un faux id ni un tick).
+  **Non testable en live** (ni paquet ni terminal IB en sandbox) — 1er run réel
+  à valider chez l'utilisateur (TWS ouvert, souscription données de marché pour
+  le feed), comme `connect()`. 2 tests ajoutés (ordre + flux refusés hors
+  connexion). `docs/architecture.md` + ce fichier mis à jour. **125 verts.**
+  Reste : MT5 (order routing + feed) et inférence live de Couleuvre.
 
 - **2026-07-21** — **Câblage live, étape 2 : montage du flux (backbone
   d'orchestration)** (demande utilisateur « continue sur le flux live »).
