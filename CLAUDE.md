@@ -326,13 +326,29 @@ jamais commité — modèle dans `.env.example`).
   sélection de modèle live n'est pas câblée (son `on_tick` est indexé par
   bougie — inférence live tick→bougie = suite) : montage warmup `{}` → aucun
   ordre, honnête. Une stratégie non-ML traderait normalement à travers ce flux.
-- **Squelettes restants** (NotImplementedError) : le **routage d'ordres**
-  (`place_order`/`cancel_order`) et le **flux de prix** (`subscribe_market_data`)
-  de **MetaTrader 5** uniquement (`order_send` + ticks) — IB est désormais
-  COMPLET (cf. ci-dessus). Ils ont un appelant (le backbone live), restent à
-  câbler + valider chez l'utilisateur. On ne simule surtout jamais un ordre.
-  **Inférence live de Couleuvre** (agrégation tick→bougie + sélection du modèle
-  par actif) : à concevoir.
+- **MetaTrader 5 COMPLET (routage d'ordres + flux de prix livrés)** — comme IB
+  désormais. `place_order` = ordre au marché `TRADE_ACTION_DEAL` avec **SL/TP
+  attachés NATIVEMENT à la position** (MT5 les rattache, l'un annule l'autre =
+  équivalent MT5 du bracket OCA d'IB ; les barrières triple-barrier validées par
+  le RiskManager deviennent le SL/TP), mode de remplissage déduit du symbole
+  (IOC préféré, sinon FOK), `magic` PyEA, prix ask (BUY) / bid (SELL) ; rejet du
+  terminal → `RuntimeError` explicite (jamais un faux ticket). `cancel_order` =
+  suppression d'un ordre EN ATTENTE (`TRADE_ACTION_REMOVE`), ticket introuvable =
+  log (comme IB). **Flux de prix par SCRUTATION** (différence majeure avec IB qui
+  est push) : MT5 n'a pas de callback → une tâche asyncio par symbole interroge
+  `symbol_info_tick` toutes 0,25 s, ne relaie qu'un tick NOUVEAU (dédup
+  `time_msc`), l'appel IPC bloquant déporté dans un exécuteur (boucle non gelée),
+  prix = mid bid/ask (sinon last), NaN/0 ignoré (jamais de tick fabriqué).
+  `symbol_select(sym, True)` avant de coter/trader ; symbole inconnu → `ValueError`
+  (le `MarketDataFeed` saute alors ce symbole sans couper les autres). Import
+  paresseux maintenu, honnêteté déconnecté → `ConnectionError` AVANT tout import.
+  **1er run réel à valider chez l'utilisateur** (terminal MT5 ouvert + compte
+  connecté), comme IB. Tests : 4 ajoutés (place_order DEAL + SL/TP + normalisation,
+  flux scrutation relaie/dédoublonne via faux module MT5, ordre + flux refusés
+  hors connexion).
+- **Squelette restant** : **inférence live de Couleuvre** (agrégation tick→bougie
+  + sélection du modèle par actif) — à concevoir. Les DEUX brokers (IB + MT5)
+  sont désormais COMPLETS côté câblage (cycle de vie, compte, ordres, flux).
 
 ## Points de vigilance (audit modularité 2026-07-18)
 
@@ -352,10 +368,51 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
    (feed + `LiveTradingEngine`), démarré à la connexion broker. Le flux
    strict `Strategy → Signal → RiskManager → OrderRequest → BrokerGateway`
    est imposé en live comme en backtest (aucun raccourci stratégie→broker).
-   Reste à câbler : les feuilles broker (order routing + flux de prix IB/MT5)
-   et l'inférence live de Couleuvre.
+   Feuilles broker (order routing + flux de prix) désormais câblées pour IB
+   ET MT5. Reste à câbler : l'inférence live de Couleuvre.
 
 ## Journal de décisions
+
+- **2026-07-21** — **Câblage live, étape 4 : MetaTrader 5 COMPLET** (demande
+  utilisateur « finis metatrader d'abord »). Après IB (étape 3), on câble les
+  feuilles broker de MT5, appelées par le `LiveTradingEngine`. Décisions et
+  conséquences : (1) **`place_order` = ordre au marché `TRADE_ACTION_DEAL` avec
+  SL/TP NATIFS** : contrairement au bracket multi-ordres d'IB, MT5 rattache
+  directement `sl`/`tp` à la position (l'un annule l'autre à l'exécution) — plus
+  simple, et sémantiquement identique (les barrières triple-barrier validées par
+  le RiskManager deviennent le SL/TP). Entrée au marché = équivalent live de la
+  décision cheat-on-close du backtest. Prix ask (BUY) / bid (SELL) pour la
+  protection `deviation` ; `magic` PyEA pour tracer nos ordres ; **mode de
+  remplissage déduit du symbole** (`filling_mode` du courtier → IOC préféré,
+  sinon FOK — un mode non supporté fait rejeter l'ordre). Rejet/None du terminal
+  → `RuntimeError` explicite (jamais un faux ticket). (2) **`cancel_order` =
+  `TRADE_ACTION_REMOVE`** d'un ordre EN ATTENTE par ticket : un ordre au marché
+  déjà exécuté est devenu une position (fermée par son SL/TP), non annulable —
+  ticket introuvable = log, pas d'erreur (comme IB). (3) **Flux de prix par
+  SCRUTATION** (LA différence avec IB, qui est push) : MT5 n'expose aucun
+  callback → une tâche asyncio par symbole interroge `symbol_info_tick` toutes
+  `_TICK_POLL_INTERVAL` (0,25 s), ne relaie qu'un tick NOUVEAU (dédup par
+  `time_msc`) ; **l'appel IPC bloquant est déporté dans `run_in_executor`** pour
+  ne pas geler la boucle asyncio ; prix = mid bid/ask (sinon last), 0/NaN ignoré
+  (jamais de prix fabriqué). `unsubscribe`/`disconnect` arrêtent proprement les
+  tâches (event + cancel + await). (4) **`symbol_select(sym, True)`** avant de
+  coter/trader (requis pour un symbole hors Market Watch) ; symbole inconnu du
+  courtier → `ValueError` claire → le `MarketDataFeed` saute ce symbole sans
+  couper les autres (comme la résolution de contrat IB). Symbole normalisé
+  (barre oblique retirée, majuscules). (5) **Honnêteté maintenue** : import
+  paresseux conservé, toute méthode appelée déconnectée lève `ConnectionError`
+  AVANT tout accès à MT5 (jamais un faux ticket ni un tick). **Non testable en
+  live** (ni paquet MetaTrader5 ni terminal en sandbox Linux) — 1er run réel à
+  valider chez l'utilisateur (terminal MT5 ouvert + compte connecté), comme IB.
+  (6) **Tests** : 4 ajoutés, dont 2 avec un **faux module MT5** injecté
+  (`gateway._mt5`) qui exercent VRAIMENT la logique — `place_order` construit la
+  bonne requête DEAL (symbole normalisé, type BUY→ask, SL/TP, magic, filling
+  IOC) et retourne le ticket ; le flux par scrutation relaie un tick puis
+  dédoublonne (ticker figé → 1 seul `TickData`, prix = mid) — plus poussés que
+  les tests IB (qui ne couvrent que le refus déconnecté), + 2 tests de refus hors
+  connexion (ordre + flux). `docs/architecture.md` et ce fichier mis à jour.
+  **129 verts.** Reste : inférence live de Couleuvre (agrégation tick→bougie +
+  sélection du modèle par actif). Les DEUX brokers sont désormais COMPLETS.
 
 - **2026-07-21** — **Câblage live, étape 3 : Interactive Brokers COMPLET**
   (demande utilisateur « finis tout ce qui concerne IB d'abord »). Après le

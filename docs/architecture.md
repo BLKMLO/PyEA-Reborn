@@ -62,7 +62,7 @@ PyEA-Reborn/
 │   │   ├── broker_credentials.py          # Store login/mdp en mémoire — réservé à un futur broker (ni IB ni MT5 n'en ont besoin).
 │   │   ├── broker_runtime.py              # Broker actif + état de connexion RÉEL + bascule runtime (singleton, lu par l'API).
 │   │   ├── broker_interactive_brokers.py  # Interactive Brokers (ib_async, via TWS/IB Gateway) : connexion, lecture de compte, ordres (bracket) + flux de prix (à valider live).
-│   │   └── broker_metatrader.py           # MetaTrader 5 (paquet MetaTrader5, attache à un terminal MT5) : connexion + lecture de compte RÉELLES.
+│   │   └── broker_metatrader.py           # MetaTrader 5 (paquet MetaTrader5, attache à un terminal MT5) : connexion, lecture de compte, ordres (DEAL + SL/TP natifs) + flux de prix (scrutation, à valider live).
 │   │
 │   ├── storage/
 │   │   ├── storage_models.py              # Modèles SQLAlchemy (signals, trades, états, runs).
