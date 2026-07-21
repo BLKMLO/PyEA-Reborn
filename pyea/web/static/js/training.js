@@ -330,9 +330,10 @@ async function loadRuns() {
           <td class="pr-2">${run.status}</td>
           <td class="pr-2">${run.oos_trades ?? "—"}</td>
           <td class="pr-2">${run.oos_pnl ?? "—"}</td>
-          <td>${run.oos_win_rate === null || run.oos_win_rate === undefined ? "—" : (run.oos_win_rate * 100).toFixed(1) + " %"}</td>
+          <td class="pr-2">${run.oos_win_rate === null || run.oos_win_rate === undefined ? "—" : (run.oos_win_rate * 100).toFixed(1) + " %"}</td>
+          <td>${num2(run.oos_profit_factor)}</td>
         </tr>`).join("")
-    : `<tr><td colspan="9" class="py-2 text-slate-500">Aucun entraînement pour l'instant.</td></tr>`;
+    : `<tr><td colspan="10" class="py-2 text-slate-500">Aucun entraînement pour l'instant.</td></tr>`;
 }
 
 // --- Init ------------------------------------------------------------------

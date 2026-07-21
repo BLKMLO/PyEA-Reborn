@@ -56,6 +56,7 @@ def finish_run(
             run.oos_pnl = oos_stats.get("total_pnl")
             run.oos_win_rate = oos_stats.get("win_rate")
             run.oos_max_drawdown = oos_stats.get("max_drawdown")
+            run.oos_profit_factor = oos_stats.get("profit_factor")
         run.artifacts_path = artifacts_path
         session.commit()
 
@@ -80,6 +81,7 @@ def list_runs(limit: int = 50) -> list[dict[str, Any]]:
                 "oos_pnl": run.oos_pnl,
                 "oos_win_rate": run.oos_win_rate,
                 "oos_max_drawdown": run.oos_max_drawdown,
+                "oos_profit_factor": run.oos_profit_factor,
                 "artifacts_path": run.artifacts_path,
             }
             for run in rows

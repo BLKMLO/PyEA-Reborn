@@ -304,6 +304,27 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
 
 ## Journal de décisions
 
+- **2026-07-21** — **Profit factor OOS ajouté à l'historique des runs**
+  (demande utilisateur, suite directe de la passe métriques). La carte
+  « Profit factor OOS » existait déjà sur la page, mais la table
+  **Historique des entraînements** (persistée) n'affichait pas cette
+  métrique. Ajouts : (1) colonne `oos_profit_factor` (nullable) sur le
+  modèle `TrainingRun`, alimentée par `finish_run` (depuis
+  `oos_stats["profit_factor"]`, déjà calculé honnêtement dans
+  `training_walkforward._report` = gains bruts / pertes brutes sur TOUS les
+  trades OOS) et exposée par `list_runs`. (2) Colonne « Profit factor » dans
+  `training.html` + rendu dans `training.js` (`num2`, colspan 9→10).
+  (3) **Conséquence de fond traitée — micro-migration SQLite** :
+  `create_all` n'altère jamais une table existante, donc une base d'une
+  version antérieure aurait fait planter TOUT `select(TrainingRun)` sur
+  « no such column: oos_profit_factor ». `init_db()` appelle désormais
+  `_add_missing_columns()` : pour SQLite, il compare les colonnes des
+  modèles aux tables réelles et `ALTER TABLE ... ADD COLUMN` les colonnes
+  **nullable** manquantes (ajout sûr, NULL sur l'existant) — rattrapage
+  idempotent qui couvre aussi tout futur ajout de champ nullable ; sur un
+  vrai SGBD (Postgres) on passera par de vraies migrations (no-op ici).
+  2 tests ajoutés (migration + persistance du profit factor), **110 verts**.
+
 - **2026-07-21** — **Métriques backtrader portées sur la page Entraînement**
   (demande utilisateur, suite du swap moteur). La page Live/Backtest exposait
   déjà Sharpe/SQN/profit factor ; l'Entraînement (walk-forward OOS) n'affichait
