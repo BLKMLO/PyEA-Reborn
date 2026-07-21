@@ -215,11 +215,13 @@ def test_status_broker_deconnecte_et_marche_demo() -> None:
 
 
 def test_connexion_broker_retour_honnete() -> None:
-    # La connexion IB n'est pas implémentée : réponse 501 explicite, JAMAIS
-    # une fausse connexion réussie.
+    # La connexion IB est désormais IMPLÉMENTÉE (ib_async), mais ne peut jamais
+    # simuler une réussite : sans le paquet (sandbox) → 503 « installez
+    # ib_async », avec le paquet mais sans TWS lancé → 502. Jamais 501, jamais
+    # une fausse connexion réussie. On vérifie l'invariant d'honnêteté.
     with _client() as client:
         response = client.post("/api/broker/connect")
-        assert response.status_code == 501
+        assert response.status_code in (502, 503)
         assert client.get("/api/status").json()["broker_connected"] is False
 
 

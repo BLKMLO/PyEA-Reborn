@@ -273,14 +273,20 @@ jamais commité — modèle dans `.env.example`).
   identique), `load_history` ne lit que les années de la période, le
   téléchargeur survit à une année en échec (résumé en fin de run), erreurs
   422 lisibles côté UI, `wss://` derrière HTTPS. 80 tests verts.
-- **Deux brokers enregistrés** : `InteractiveBrokersGateway` (ib_async, via
-  TWS/IB Gateway) et `MetaTraderGateway` (paquet `MetaTrader5`, attache à un
-  terminal MT5). **MetaTrader : connexion + lecture de compte RÉELLES**
-  (`connect`/`disconnect`/`is_connected`/`get_positions`/`get_account_summary`
-  via `MetaTrader5.initialize()`/`account_info()`/`positions_get()`), import
-  paresseux (paquet Windows non installé en sandbox → 503 honnête « installez
-  MetaTrader5 », jamais une fausse connexion) — **1er run réel à valider chez
-  l'utilisateur** (comme Dukascopy). IB `connect()` reste à écrire (ib_async).
+- **Deux brokers enregistrés, connexion + lecture de compte RÉELLES pour les
+  DEUX** : `InteractiveBrokersGateway` (ib_async, via TWS/IB Gateway) et
+  `MetaTraderGateway` (paquet `MetaTrader5`, attache à un terminal MT5).
+  **IB** : `connect` via `IB().connectAsync(host, port, clientId)` (aucun
+  login/mdp — TWS/IB Gateway authentifie), `disconnect`/`is_connected`
+  (`ib.isConnected()`), `get_positions` (`reqPositionsAsync` + P&L latent du
+  `portfolio()` par conId), `get_account_summary` (`accountSummaryAsync`,
+  tags NetLiquidation/TotalCashValue/FullMaintMarginReq/AvailableFunds/
+  UnrealizedPnL → equity/balance/margin/margin_free/profit). **MetaTrader** :
+  `initialize()`/`account_info()`/`positions_get()`. Les DEUX en **import
+  paresseux** (ni `ib_async` ni `MetaTrader5` en sandbox → 503 honnête
+  « installez … », jamais une fausse connexion) — **1er run réel à valider
+  chez l'utilisateur** (TWS ouvert + API socket activée pour IB ; terminal
+  MT5 pour MetaTrader), comme Dukascopy.
 - **Squelettes restants** (NotImplementedError) : le **routage d'ordres**
   (`place_order`/`cancel_order`) et le **flux de prix** (`subscribe_market_data`)
   des DEUX brokers — aucun appelant tant que le flux live n'est pas monté dans
@@ -305,6 +311,38 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
    raccourci stratégie→broker, même « pour tester »).
 
 ## Journal de décisions
+
+- **2026-07-21** — **Câblage live, étape 1 : `InteractiveBrokersGateway.connect()`
+  implémentée** (demande utilisateur « attaque le câblage live : gateway IB
+  connect() »). Décisions et conséquences : (1) **Modèle calqué sur MetaTrader**
+  (cohérence) : cycle de vie + lecture de compte RÉELS, routage d'ordres + flux
+  de prix laissés en `NotImplementedError` (pas d'appelant tant que le flux live
+  n'est pas monté dans `app_factory` — on ne simule jamais un ordre). (2)
+  **Import paresseux de `ib_async`** (`_import_ib()` dans les méthodes) alors
+  qu'il est une dépendance dure (`requirements.txt`) : la sandbox de dev ne
+  l'a pas installé, la gateway doit quand même s'enregistrer et l'app démarrer
+  partout ; paquet absent → ImportError claire → **503 honnête** (« installez
+  ib_async »), jamais un import cassé au boot. (3) **Aucun login/mdp** (déjà
+  tranché) : `connectAsync(host, port, clientId, timeout=8, readonly=False)` —
+  TWS / IB Gateway (déjà logué) authentifie ; paper/live = port de config
+  (7497/7496). (4) **Lecture de compte** : `get_positions` via
+  `reqPositionsAsync` (quantité signée + avgCost) enrichi du **P&L latent** du
+  `portfolio()` indexé par `conId` (les positions IB ne le portent pas) ;
+  `get_account_summary` via `accountSummaryAsync`, tags IB mappés vers les
+  MÊMES clés que MT5 (equity/balance/margin/margin_free/profit) pour une lecture
+  homogène côté API/UI. (5) **Échec de connexion → `ConnectionError`** avec
+  message actionnable (TWS lancé ? API activée ? port ?) + `disconnect()`
+  défensif si le socket est resté ouvert → l'API le rend en **502** (déjà
+  géré par le endpoint). (6) **Non testable en live** (ni paquet ni terminal IB
+  en sandbox) — comme MT5/Dukascopy, **1er run réel à valider chez
+  l'utilisateur**. Tests ajoutés (pas de `pytest-asyncio` dans le projet →
+  `asyncio.run` dans des tests sync) : IB déconnectée ne ment pas (positions/
+  résumé vides), connexion sans paquet → ImportError « ib_async » ; le test API
+  qui attendait **501** (ancien squelette) devient l'invariant d'honnêteté
+  « 502 ou 503, jamais une fausse réussite ». `docs/architecture.md` mis à jour
+  (IB : connexion + lecture RÉELLES). **113 verts.** Reste : IB order routing +
+  feed, MT5 order routing + feed, `MarketDataFeed`, montage du flux live dans
+  `app_factory`.
 
 - **2026-07-21** — **Taux de gain OOS agrégé honnêtement** (suite directe de
   la passe métriques : on finit d'appliquer au win_rate le principe déjà
