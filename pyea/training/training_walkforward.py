@@ -93,12 +93,13 @@ def run_walkforward(
     folds_frames = split_walkforward(frame, n_folds)
     folds: list[WalkForwardFold] = []
     oos_equity: list[dict[str, Any]] = []
+    oos_trade_pnls: list[float] = []
     oos_offset = 0.0
 
     for i, (train_frame, test_frame) in enumerate(folds_frames):
         if cancelled():
             logger.info("Walk-forward annulé au pli %d/%d.", i + 1, n_folds)
-            return _report(symbol, timeframe, folds, oos_equity, cancelled=True)
+            return _report(symbol, timeframe, folds, oos_equity, oos_trade_pnls, cancelled=True)
 
         fold = WalkForwardFold(
             index=i + 1,
@@ -127,7 +128,7 @@ def run_walkforward(
         if cancelled():
             logger.info("Walk-forward annulé après l'entraînement du pli %d/%d.", i + 1, n_folds)
             folds.append(fold)
-            return _report(symbol, timeframe, folds, oos_equity, cancelled=True)
+            return _report(symbol, timeframe, folds, oos_equity, oos_trade_pnls, cancelled=True)
 
         progress({"fold": i + 1, "total": n_folds, "phase": "test",
                   "message": f"Pli {i + 1}/{n_folds} : backtest out-of-sample…"})
@@ -141,9 +142,13 @@ def run_walkforward(
                 {"time": timestamp.isoformat(), "equity": round(oos_offset + value, 5)}
             )
         oos_offset += result.stats["total_pnl"]
+        # P&L de chaque trade OOS : sert à agréger un profit factor EXACT sur
+        # l'ensemble des plis (gains bruts / pertes brutes) — on ne moyenne
+        # jamais les ratios par pli (mathématiquement faux).
+        oos_trade_pnls.extend(trade.pnl for trade in result.trades)
         folds.append(fold)
 
-    report = _report(symbol, timeframe, folds, oos_equity, cancelled=False)
+    report = _report(symbol, timeframe, folds, oos_equity, oos_trade_pnls, cancelled=False)
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     (artifacts_dir / "metadata.json").write_text(
         json.dumps(report, indent=2, default=str), encoding="utf-8"
@@ -156,6 +161,7 @@ def _report(
     timeframe: str,
     folds: list[WalkForwardFold],
     oos_equity: list[dict[str, Any]],
+    oos_trade_pnls: list[float],
     cancelled: bool,
 ) -> dict[str, Any]:
     trades = sum(fold.test_stats.get("trades", 0) for fold in folds)
@@ -170,6 +176,11 @@ def _report(
     for value in equity_values:
         peak = max(peak, value)
         max_drawdown = max(max_drawdown, peak - value)
+    # Profit factor agrégé sur TOUS les trades OOS : la seule agrégation
+    # correcte (gains bruts / pertes brutes), pas une moyenne de ratios.
+    gross_profit = sum(pnl for pnl in oos_trade_pnls if pnl > 0)
+    gross_loss = -sum(pnl for pnl in oos_trade_pnls if pnl < 0)
+    profit_factor = round(gross_profit / gross_loss, 4) if gross_loss > 0 else None
     return {
         "symbol": symbol,
         "timeframe": timeframe,
@@ -180,6 +191,7 @@ def _report(
             "total_pnl": total_pnl,
             "win_rate": round(sum(win_rates) / len(win_rates), 4) if win_rates else None,
             "max_drawdown": round(max_drawdown, 5),
+            "profit_factor": profit_factor,
         },
         "oos_equity_curve": oos_equity[:2000],
     }

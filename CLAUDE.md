@@ -207,13 +207,18 @@ jamais commité — modèle dans `.env.example`).
   statut) avec artefacts dans `data/models/<run>/` (metadata.json +
   `model.txt`/`features.json` par pli). Hook `Strategy.train(frame, params)`
   au contrat (défaut no-op = non entraînable). L'UI met en avant
-  l'**out-of-sample** : cartes OOS, **courbe d'équité OOS**, table des plis
+  l'**out-of-sample** : cartes OOS (trades, P&L, taux de gain, drawdown max
+  **+ profit factor OOS agrégé**), **courbe d'équité OOS**, table des plis
   avec colonne **AUC IS** (in-sample) en regard du taux de gain OOS (écart =
-  surapprentissage), et **panneau « définition du modèle » en lecture
+  surapprentissage) **+ Sharpe / SQN par pli** (analyzers backtrader sur
+  chaque bloc OOS), et **panneau « définition du modèle » en lecture
   seule** (features/barrières/horizon/seuils, servi par
   `GET /api/training/definition/{strategy}` = source unique via
   `Strategy.model_definition()`). La page backtest garde un renvoi vers
-  cet onglet.
+  cet onglet. **Agrégation honnête** : le profit factor OOS est recalculé
+  depuis TOUS les trades OOS (gains bruts / pertes brutes) — jamais une
+  moyenne de ratios par pli ; Sharpe/SQN restent affichés **par pli** (pas
+  d'agrégat statistiquement douteux entre plis).
 - **Spécification de Couleuvre v0.1** fournie par l'utilisateur :
   `docs/strategie_couleuvre.md` (swing intra-semaine 2-5 j, triple
   barrier ATR, features prix/tendance/momentum/vol/calendrier, **un modèle
@@ -298,6 +303,26 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
    raccourci stratégie→broker, même « pour tester »).
 
 ## Journal de décisions
+
+- **2026-07-21** — **Métriques backtrader portées sur la page Entraînement**
+  (demande utilisateur, suite du swap moteur). La page Live/Backtest exposait
+  déjà Sharpe/SQN/profit factor ; l'Entraînement (walk-forward OOS) n'affichait
+  que P&L / taux de gain / drawdown. Ajouts, **avec un souci d'agrégation
+  honnête** (c'est le sens de cette page) : (1) **carte « Profit factor OOS »**
+  = recalculée dans `training_walkforward._report` depuis TOUS les trades OOS
+  (`gross_profit / gross_loss`) — la seule agrégation correcte ; on refuse
+  explicitement de moyenner les profit factors par pli (mathématiquement faux).
+  Les P&L de trade sont collectés dans la boucle (`oos_trade_pnls`) et passés à
+  `_report`. (2) **Colonnes Sharpe / SQN PAR PLI** dans la table walk-forward,
+  lues directement du `test_stats` de chaque pli (valeur réelle de l'analyzer
+  backtrader sur ce bloc OOS) — **volontairement pas d'agrégat Sharpe/SQN
+  inter-plis** : un Sharpe est fonction de la série de rendements d'un pli, le
+  concaténer entre plis (offsets, granularité perdue) donnerait un chiffre
+  trompeur ; par pli, chacun est exact et sert de diagnostic (comme l'AUC IS).
+  Conséquences : `oos_stats` gagne la clé `profit_factor` (2 tests d'égalité
+  d'ensemble de clés mis à jour + 1 assertion « présent, None sans trade »),
+  `training.js` (carte + colonnes + helper `num2`), `training.html` (en-têtes
+  Sharpe/SQN). **108 tests toujours verts**, JS syntaxiquement validé.
 
 - **2026-07-20** — **Moteur de backtest maison remplacé par backtrader**
   (demande utilisateur : « mettre en place un moteur de backtest déjà

@@ -56,6 +56,9 @@ def test_run_walkforward_strategie_muette(tmp_path: Path) -> None:
     )
     assert len(report["folds"]) == 3
     assert report["oos_stats"]["trades"] == 0
+    # Profit factor agrégé exposé (None faute de trade OOS), jamais absent.
+    assert "profit_factor" in report["oos_stats"]
+    assert report["oos_stats"]["profit_factor"] is None
     assert report["cancelled"] is False
     # 2 événements de progression par pli (train + test).
     assert len(events) == 6

@@ -118,7 +118,9 @@ def test_walkforward_bout_en_bout(tmp_path) -> None:
         cancelled=lambda: False,
     )
     assert report["cancelled"] is False
-    assert set(report["oos_stats"]) == {"trades", "total_pnl", "win_rate", "max_drawdown"}
+    assert set(report["oos_stats"]) == {
+        "trades", "total_pnl", "win_rate", "max_drawdown", "profit_factor"
+    }
     assert (tmp_path / "metadata.json").exists()
     assert (tmp_path / "fold_1" / "model.txt").exists()  # modèle par pli sauvé
     assert (tmp_path / "fold_1" / "features.json").exists()

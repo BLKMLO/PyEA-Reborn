@@ -40,6 +40,8 @@ function statCard(label, value, colored) {
     </div>`;
 }
 
+const num2 = (v) => (v === null || v === undefined ? "—" : v.toFixed(2));
+
 // Erreur API lisible : FastAPI renvoie soit une chaîne (HTTPException),
 // soit un tableau d'objets (erreur de validation 422) — sans ce garde-fou,
 // l'utilisateur voyait « [object Object] ».
@@ -262,7 +264,9 @@ function renderTraining(report) {
     statCard("Trades OOS", stats.trades) +
     statCard("P&L OOS", stats.total_pnl, true) +
     statCard("Taux de gain OOS", stats.win_rate === null ? null : `${(stats.win_rate * 100).toFixed(1)} %`) +
-    statCard("Drawdown max OOS", stats.max_drawdown);
+    statCard("Drawdown max OOS", stats.max_drawdown) +
+    // Profit factor agrégé (gains bruts / pertes brutes sur tous les trades OOS).
+    statCard("Profit factor OOS", stats.profit_factor == null ? null : stats.profit_factor.toFixed(2));
 
   const curve = report.oos_equity_curve || [];
   if (oosEquityChart) oosEquityChart.destroy();
@@ -304,7 +308,9 @@ function renderTraining(report) {
       <td class="pr-2">${fold.test_stats.trades}</td>
       <td class="pr-2 ${fold.test_stats.total_pnl >= 0 ? "text-emerald-400" : "text-red-400"}">${fold.test_stats.total_pnl}</td>
       <td class="pr-2">${fold.test_stats.win_rate === null ? "—" : (fold.test_stats.win_rate * 100).toFixed(1) + " %"}</td>
-      <td>${fold.test_stats.max_drawdown}</td>
+      <td class="pr-2">${fold.test_stats.max_drawdown}</td>
+      <td class="pr-2 text-slate-400">${num2(fold.test_stats.sharpe_ratio)}</td>
+      <td class="text-slate-400">${num2(fold.test_stats.sqn)}</td>
     </tr>`;
   }).join("");
 }
