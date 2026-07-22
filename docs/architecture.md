@@ -26,8 +26,17 @@ PyEA-Reborn/
 │   │   └── core_events.py                 # Bus pub/sub asynchrone (ticks, signaux, statut, logs).
 │   │
 │   ├── data/
-│   │   ├── data_market_feed.py            # Ingestion : ticks broker → bus d'événements.
+│   │   ├── data_market_feed.py            # Ingestion : ticks broker → bus d'événements (agnostique du broker).
 │   │   └── data_history_downloader.py     # Historique M1 Dukascopy → Parquet (+ load/resample).
+│   │
+│   ├── live/
+│   │   ├── live_engine.py                 # Flux strict en temps réel : bus (ticks) → Strategy →
+│   │   │                                  # Signal → RiskManager → OrderRequest → BrokerGateway.
+│   │   │                                  # Ne trade que si armé + connecté + kill-switch ON.
+│   │   ├── live_candles.py                # Agrégateur tick→bougie (OHLCV) aligné sur le timeframe.
+│   │   ├── live_models.py                 # Sélection du modèle live par actif (dernier run réussi).
+│   │   └── live_runtime.py                # Singleton : assemble feed + moteur, warmup par symbole
+│   │                                      # (modèle + historique), démarré/arrêté à la connexion broker.
 │   │
 │   ├── strategies/
 │   │   ├── strategy_base.py               # Contrat abstrait Strategy (warmup / on_tick / shutdown / train).
@@ -54,8 +63,8 @@ PyEA-Reborn/
 │   │   ├── broker_gateway.py              # Contrat générique BrokerGateway + registre (+ list_gateways).
 │   │   ├── broker_credentials.py          # Store login/mdp en mémoire — réservé à un futur broker (ni IB ni MT5 n'en ont besoin).
 │   │   ├── broker_runtime.py              # Broker actif + état de connexion RÉEL + bascule runtime (singleton, lu par l'API).
-│   │   ├── broker_interactive_brokers.py  # Interactive Brokers (ib_async, via TWS/IB Gateway) : connexion + lecture de compte RÉELLES.
-│   │   └── broker_metatrader.py           # MetaTrader 5 (paquet MetaTrader5, attache à un terminal MT5) : connexion + lecture de compte RÉELLES.
+│   │   ├── broker_interactive_brokers.py  # Interactive Brokers (ib_async, via TWS/IB Gateway) : connexion, lecture de compte, ordres (bracket) + flux de prix (à valider live).
+│   │   └── broker_metatrader.py           # MetaTrader 5 (paquet MetaTrader5, attache à un terminal MT5) : connexion, lecture de compte, ordres (DEAL + SL/TP natifs) + flux de prix (scrutation, à valider live).
 │   │
 │   ├── storage/
 │   │   ├── storage_models.py              # Modèles SQLAlchemy (signals, trades, états, runs).
@@ -93,7 +102,10 @@ PyEA-Reborn/
 
 1. **Flux strict** : `MarketDataFeed → Strategy → Signal → RiskManager →
    OrderRequest → BrokerGateway`. Aucune stratégie ne parle au broker ;
-   aucun ordre ne contourne le risk manager.
+   aucun ordre ne contourne le risk manager. Ce flux est imposé À LA FOIS
+   en backtest (`backtest_engine.py`) et en live (`live/live_engine.py`) —
+   le moteur live consomme les ticks du bus et applique la même chaîne, en
+   ne tradant que les paires armées avec broker connecté et kill-switch ON.
 2. **Le bus d'événements découple tout** : broker, stratégie et logs
    publient ; le WebSocket et la persistance consomment. FastAPI ne
    s'infiltre jamais dans la logique de trading.

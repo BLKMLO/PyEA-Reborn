@@ -88,6 +88,35 @@ def list_runs(limit: int = 50) -> list[dict[str, Any]]:
         ]
 
 
+def latest_completed_run(strategy_name: str, symbol: str) -> dict[str, Any] | None:
+    """Dernier run RÉUSSI (``completed``) pour une paire donnée, ou ``None``.
+
+    Sert à sélectionner le modèle de l'inférence live : un modèle par actif,
+    le plus récent qui soit allé au bout de son walk-forward. Les runs
+    ``running``/``failed``/``cancelled`` sont ignorés (pas d'artefacts fiables).
+    """
+    with get_session() as session:
+        run = session.scalars(
+            select(TrainingRun)
+            .where(
+                TrainingRun.strategy_name == strategy_name,
+                TrainingRun.symbol == symbol,
+                TrainingRun.status == "completed",
+            )
+            .order_by(TrainingRun.created_at.desc())
+            .limit(1)
+        ).first()
+        if run is None:
+            return None
+        return {
+            "id": run.id,
+            "symbol": run.symbol,
+            "timeframe": run.timeframe,
+            "folds": run.folds,
+            "artifacts_path": run.artifacts_path,
+        }
+
+
 def fail_orphan_runs() -> int:
     """Marque « failed » les runs restés « running » (serveur arrêté en plein
     entraînement : le thread meurt avec le processus, la ligne ne serait

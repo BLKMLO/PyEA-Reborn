@@ -19,10 +19,26 @@ que la gateway s'enregistre et que l'app démarre partout. Une connexion
 sans le paquet lève une erreur claire (« installez MetaTrader5 »), jamais
 un import cassé au démarrage. Comme pour le téléchargeur Dukascopy, le
 premier run réel est à valider chez l'utilisateur (poste Windows + terminal).
+
+Livrés ici : cycle de vie (``connect``/``disconnect``/``is_connected``),
+lecture de compte (``get_positions``/``get_account_summary``), **routage
+d'ordres** (``place_order`` = ordre au marché ``TRADE_ACTION_DEAL`` avec
+SL/TP attachés NATIVEMENT à la position — équivalent MT5 du bracket IB —,
+``cancel_order`` = suppression d'un ordre en attente) et **flux de prix**
+(``subscribe_market_data``). Différence majeure avec IB : MetaTrader 5
+**n'a pas de callback push** ; le flux se fait par **scrutation** de
+``symbol_info_tick`` dans une tâche asyncio (l'appel IPC bloquant est
+déporté dans un exécuteur pour ne pas geler la boucle). Comme la connexion,
+routage et flux exigent un terminal MT5 réel : écrits sur le même modèle
+prudent (import paresseux, échec honnête si déconnecté — jamais d'ordre ni
+de tick simulé) et **à valider chez l'utilisateur** au premier run réel.
 """
 
 from __future__ import annotations
 
+import asyncio
+import math
+from datetime import datetime, timezone
 from typing import Any
 
 from pyea.brokers.broker_gateway import (
@@ -31,10 +47,24 @@ from pyea.brokers.broker_gateway import (
     register_gateway,
 )
 from pyea.config.config_settings import Settings
-from pyea.core.core_domain import OrderRequest, Position
+from pyea.core.core_domain import OrderRequest, OrderSide, Position, TickData
 from pyea.core.core_logging import get_logger
 
 logger = get_logger(__name__)
+
+#: Intervalle de scrutation du flux de prix (s). MT5 n'a pas de push : on
+#: interroge ``symbol_info_tick`` et on ne relaie qu'un tick NOUVEAU (dédup
+#: par ``time_msc``). Couleuvre est indexée par bougie (M1+) → 0,25 s suffit
+#: largement sans marteler l'IPC du terminal.
+_TICK_POLL_INTERVAL = 0.25
+
+#: Écart de prix toléré (points) sur l'ordre au marché (protection de l'ordre
+#: contre un déplacement de prix entre la cotation et l'envoi).
+_ORDER_DEVIATION = 20
+
+#: Étiquette numérique des ordres émis par PyEA (champ ``magic`` de MT5),
+#: pour les distinguer d'ordres passés à la main dans le terminal.
+_PYEA_MAGIC = 770077
 
 
 def _import_mt5() -> Any:
@@ -59,6 +89,10 @@ class MetaTraderGateway(BrokerGateway):
         self._terminal_path = settings.mt5_terminal_path
         self._trading_mode = settings.trading_mode
         self._mt5: Any | None = None  # module gardé une fois initialisé
+        # Souscriptions de marché vivantes : symbole → (tâche de scrutation,
+        # événement d'arrêt). MT5 n'ayant pas de push, chaque symbole a sa
+        # boucle de polling.
+        self._md: dict[str, tuple[asyncio.Task[None], asyncio.Event]] = {}
 
     def connection_info(self) -> dict[str, str]:
         return {
@@ -95,6 +129,9 @@ class MetaTraderGateway(BrokerGateway):
             )
 
     async def disconnect(self) -> None:
+        # Couper d'abord les flux de prix (leurs tâches lisent self._mt5).
+        for symbol in list(self._md):
+            await self.unsubscribe_market_data(symbol)
         if self._mt5 is not None:
             self._mt5.shutdown()
             self._mt5 = None
@@ -143,24 +180,199 @@ class MetaTraderGateway(BrokerGateway):
             "profit": info.profit,
         }
 
-    # --- Routage d'ordres et flux de prix : câblage live à venir ---
-    # Comme pour IB, aucune de ces méthodes n'a d'appelant tant que le flux
-    # live (Strategy → RiskManager → BrokerGateway + MarketDataFeed) n'est pas
-    # monté dans app_factory. On ne simule surtout pas un envoi d'ordre.
+    # --- Routage d'ordres ---
     async def place_order(self, order: OrderRequest) -> str:
-        raise NotImplementedError(
-            "Envoi d'ordre MetaTrader 5 à câbler avec le flux live (order_send)."
+        """Envoie un ordre au marché avec SL/TP attachés NATIVEMENT.
+
+        Un ``TRADE_ACTION_DEAL`` MT5 accepte directement les champs ``sl`` et
+        ``tp`` : le terminal les rattache à la position ouverte (l'un annule
+        l'autre à l'exécution). C'est l'équivalent MetaTrader du bracket OCA
+        d'IB — les barrières triple-barrier validées par le RiskManager
+        deviennent le SL/TP de la position, cohérent avec le modèle backtest
+        (barrières = ordres validés à l'entrée, pas un contournement du risque).
+        L'entrée au marché en live est l'équivalent de la décision à la clôture
+        de bougie du backtest. On ne simule jamais un envoi : déconnecté →
+        ``ConnectionError`` ; rejet du terminal → ``RuntimeError`` explicite.
+        """
+        if not self.is_connected():
+            raise ConnectionError(
+                "MetaTrader 5 non connecté : impossible d'envoyer un ordre."
+            )
+        mt5 = self._mt5
+        symbol = self._resolve_symbol(symbol=order.symbol)
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is None:
+            raise ConnectionError(
+                f"Prix indisponible pour « {symbol} » (symbole non coté ?)."
+            )
+        if order.side == OrderSide.BUY:
+            mt5_type, price = mt5.ORDER_TYPE_BUY, tick.ask
+        else:
+            mt5_type, price = mt5.ORDER_TYPE_SELL, tick.bid
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": symbol,
+            "volume": float(abs(order.quantity)),
+            "type": mt5_type,
+            "price": float(price),
+            "deviation": _ORDER_DEVIATION,
+            "magic": _PYEA_MAGIC,
+            "comment": "PyEA",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": self._filling_mode(symbol),
+        }
+        if order.stop_loss is not None:
+            request["sl"] = float(order.stop_loss)
+        if order.take_profit is not None:
+            request["tp"] = float(order.take_profit)
+
+        result = mt5.order_send(request)
+        if result is None:
+            code, message = mt5.last_error()
+            raise RuntimeError(
+                f"Envoi d'ordre MetaTrader 5 échoué ({code}: {message})."
+            )
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            raise RuntimeError(
+                f"Ordre MetaTrader 5 rejeté — retcode {result.retcode} "
+                f"({result.comment})."
+            )
+        logger.info(
+            "Ordre MT5 soumis — %s %s x%s (ticket %s)%s.",
+            order.side.value, symbol, request["volume"], result.order,
+            " + SL/TP" if ("sl" in request or "tp" in request) else "",
         )
+        return str(result.order)
 
     async def cancel_order(self, order_id: str) -> None:
-        raise NotImplementedError(
-            "Annulation d'ordre MetaTrader 5 à câbler avec le flux live."
-        )
+        """Supprime un ordre EN ATTENTE par son ticket (``TRADE_ACTION_REMOVE``).
 
+        Un ordre au marché déjà exécuté n'est plus annulable (il est devenu une
+        position, fermée par son SL/TP) ; ``cancel_order`` cible donc les ordres
+        pendants. Ticket introuvable = log, pas d'erreur (déjà exécuté/annulé),
+        comme la gateway IB.
+        """
+        if not self.is_connected():
+            raise ConnectionError(
+                "MetaTrader 5 non connecté : impossible d'annuler un ordre."
+            )
+        mt5 = self._mt5
+        try:
+            ticket = int(order_id)
+        except (TypeError, ValueError):
+            raise ValueError(f"Identifiant d'ordre MT5 invalide : {order_id!r}.")
+        pending = mt5.orders_get(ticket=ticket)
+        if not pending:
+            logger.warning(
+                "Ordre MT5 %s introuvable (déjà exécuté ou annulé ?).", order_id
+            )
+            return
+        result = mt5.order_send({"action": mt5.TRADE_ACTION_REMOVE, "order": ticket})
+        if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+            detail = mt5.last_error() if result is None else result.comment
+            raise RuntimeError(f"Annulation de l'ordre MT5 {order_id} échouée ({detail}).")
+        logger.info("Ordre MT5 %s annulé.", order_id)
+
+    # --- Flux de prix ---
     async def subscribe_market_data(self, symbol: str, on_tick: TickCallback) -> None:
-        raise NotImplementedError(
-            "Flux de prix MetaTrader 5 à câbler avec le MarketDataFeed live."
-        )
+        """S'abonne au flux de prix d'un symbole par SCRUTATION.
+
+        MT5 n'expose pas de callback push : on lance une tâche asyncio qui
+        interroge ``symbol_info_tick`` toutes ``_TICK_POLL_INTERVAL`` s et ne
+        relaie qu'un tick NOUVEAU (dédup par ``time_msc``). L'appel IPC bloquant
+        est déporté dans l'exécuteur par défaut pour ne pas geler la boucle.
+        """
+        if not self.is_connected():
+            raise ConnectionError(
+                "MetaTrader 5 non connecté : flux de prix indisponible."
+            )
+        if symbol in self._md:
+            return  # déjà abonné
+        resolved = self._resolve_symbol(symbol=symbol)
+        stop = asyncio.Event()
+        task = asyncio.ensure_future(self._poll_ticks(resolved, on_tick, stop))
+        self._md[symbol] = (task, stop)
+        logger.info("Flux de marché MT5 abonné — %s.", resolved)
 
     async def unsubscribe_market_data(self, symbol: str) -> None:
-        raise NotImplementedError
+        entry = self._md.pop(symbol, None)
+        if entry is None:
+            return
+        task, stop = entry
+        stop.set()
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):  # pragma: no cover - défensif
+            pass
+        logger.info("Flux de marché MT5 coupé — %s.", symbol)
+
+    async def _poll_ticks(
+        self, symbol: str, on_tick: TickCallback, stop: asyncio.Event
+    ) -> None:
+        """Boucle de scrutation d'un symbole (une par souscription)."""
+        loop = asyncio.get_running_loop()
+        last_time_msc: int | None = None
+        while not stop.is_set():
+            mt5 = self._mt5
+            if mt5 is None:  # déconnecté entre-temps
+                return
+            # IPC bloquant → exécuteur, la boucle asyncio reste réactive.
+            tick = await loop.run_in_executor(None, mt5.symbol_info_tick, symbol)
+            if tick is not None and tick.time_msc != last_time_msc:
+                last_time_msc = tick.time_msc
+                td = self._to_tick_data(symbol, tick)
+                if td is not None:
+                    await on_tick(td)
+            await asyncio.sleep(_TICK_POLL_INTERVAL)
+
+    @staticmethod
+    def _to_tick_data(symbol: str, tick: Any) -> TickData | None:
+        """Normalise un tick MT5 en ``TickData`` (mid bid/ask, sinon last)."""
+        bid, ask = tick.bid, tick.ask
+        if bid and ask:
+            price = (bid + ask) / 2
+        else:  # forex : last souvent 0 → on prend le seul côté coté
+            price = tick.last or bid or ask
+        if not price or not math.isfinite(price):
+            return None  # ticker pas prêt : jamais de prix fabriqué
+        volume = getattr(tick, "volume_real", None) or getattr(tick, "volume", None)
+        return TickData(
+            symbol=symbol,
+            price=float(price),
+            volume=float(volume) if volume else None,
+            timestamp=datetime.fromtimestamp(tick.time, tz=timezone.utc),
+        )
+
+    def _resolve_symbol(self, symbol: str) -> str:
+        """Vérifie qu'un symbole existe et l'ajoute au Market Watch du terminal.
+
+        ``symbol_select(symbol, True)`` est requis avant de coter ou de trader
+        un symbole non affiché. Échec = symbole inconnu du courtier → erreur
+        claire (le MarketDataFeed saute alors ce symbole sans couper les autres).
+        """
+        mt5 = self._mt5
+        normalized = symbol.replace("/", "").upper()
+        if not mt5.symbol_select(normalized, True):
+            code, message = mt5.last_error()
+            raise ValueError(
+                f"Symbole « {symbol} » indisponible dans le terminal MT5 "
+                f"({code}: {message}). Vérifiez son nom exact chez votre courtier."
+            )
+        return normalized
+
+    def _filling_mode(self, symbol: str) -> int:
+        """Mode d'exécution accepté par le symbole (IOC préféré, sinon FOK).
+
+        Le mode de remplissage autorisé dépend du courtier ; un mode non
+        supporté fait rejeter l'ordre. On lit le masque ``filling_mode`` du
+        symbole et on choisit un mode compatible pour un ordre au marché.
+        """
+        mt5 = self._mt5
+        info = mt5.symbol_info(symbol)
+        allowed = getattr(info, "filling_mode", 0) if info is not None else 0
+        if allowed & mt5.SYMBOL_FILLING_IOC:
+            return mt5.ORDER_FILLING_IOC
+        if allowed & mt5.SYMBOL_FILLING_FOK:
+            return mt5.ORDER_FILLING_FOK
+        return mt5.ORDER_FILLING_IOC  # défaut prudent (le plus répandu)

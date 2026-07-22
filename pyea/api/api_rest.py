@@ -23,6 +23,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from pyea.brokers.broker_runtime import broker_runtime
+from pyea.live.live_runtime import live_runtime
 from pyea.config.config_settings import get_settings
 from pyea.core.core_logging import get_logger, web_log_buffer
 from pyea.storage.storage_trades import list_recent_trades
@@ -120,12 +121,20 @@ async def connect_broker(select: BrokerSelectIn | None = None) -> dict[str, Any]
         logger.warning("Connexion broker échouée : %s", exc)
         raise HTTPException(status_code=502, detail=f"Connexion au broker échouée : {exc}")
     logger.info("Connexion au broker établie.")
+    # Démarrage du flux live (feed + moteur) : la connexion vient de réussir.
+    # Un échec de démarrage ne doit PAS invalider la connexion (déjà établie) —
+    # il est journalisé, pas propagé.
+    try:
+        await live_runtime.start()
+    except Exception as exc:  # pragma: no cover - défensif (broker réel requis)
+        logger.warning("Flux live non démarré : %s", exc)
     return {"active": broker_runtime.active_name, "broker_connected": broker_runtime.is_connected()}
 
 
 @router.post("/broker/disconnect")
 async def disconnect_broker() -> dict[str, Any]:
     """Coupe la connexion au broker (toujours autorisé)."""
+    await live_runtime.stop()
     await broker_runtime.disconnect()
     logger.info("Déconnexion du broker.")
     return {"active": broker_runtime.active_name, "broker_connected": broker_runtime.is_connected()}
