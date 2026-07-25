@@ -33,6 +33,9 @@ PyEA-Reborn/
 │   │   ├── live_engine.py                 # Flux strict en temps réel : bus (ticks) → Strategy →
 │   │   │                                  # Signal → RiskManager → OrderRequest → BrokerGateway.
 │   │   │                                  # Ne trade que si armé + connecté + kill-switch ON.
+│   │   │                                  # Tient le registre des ORDRES EN VOL (un ordre non
+│   │   │                                  # tranché bloque son symbole) et journalise les
+│   │   │                                  # ExecutionReport remontés par la gateway.
 │   │   ├── live_candles.py                # Agrégateur tick→bougie (OHLCV) aligné sur le timeframe.
 │   │   ├── live_models.py                 # Sélection du modèle live par actif (dernier run réussi).
 │   │   └── live_runtime.py                # Singleton : assemble feed + moteur, warmup par symbole
@@ -101,14 +104,23 @@ PyEA-Reborn/
 ## Règles d'architecture
 
 1. **Flux strict** : `MarketDataFeed → Strategy → Signal → RiskManager →
-   OrderRequest → BrokerGateway`. Aucune stratégie ne parle au broker ;
+   OrderRequest → BrokerGateway`, et retour par `ExecutionReport →
+   LiveTradingEngine → journal SQL`. Aucune stratégie ne parle au broker ;
    aucun ordre ne contourne le risk manager. Ce flux est imposé À LA FOIS
    en backtest (`backtest_engine.py`) et en live (`live/live_engine.py`) —
    le moteur live consomme les ticks du bus et applique la même chaîne, en
    ne tradant que les paires armées avec broker connecté et kill-switch ON.
+   Le chemin RETOUR est aussi important que l'aller : `place_order` ne fait
+   que SOUMETTRE ; c'est la gateway qui rapporte ce que le broker a fait
+   (`set_execution_callback`), ce qui libère l'ordre en vol et inscrit le
+   trade au journal. Un broker qui ne sait pas rapporter ses exécutions
+   n'alimente aucun trade — PyEA n'en invente jamais.
 2. **Le bus d'événements découple tout** : broker, stratégie et logs
    publient ; le WebSocket et la persistance consomment. FastAPI ne
-   s'infiltre jamais dans la logique de trading.
+   s'infiltre jamais dans la logique de trading. Les abonnés sont **isolés
+   les uns des autres** : une erreur d'abonné est journalisée, jamais
+   propagée au producteur (sinon une exception de stratégie tuerait la
+   boucle de flux de prix du broker, en silence).
 3. **Paper → live** = changer `broker.trading_mode` dans `config.yaml`
    (le port IB correspondant est lu dans `.env`). Rien d'autre.
 4. **`app_factory.create_app()` est le seul lieu de câblage** : les modules

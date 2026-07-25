@@ -78,4 +78,7 @@ class TradeRecord(Base):
     side: Mapped[str] = mapped_column(String(8))
     quantity: Mapped[float] = mapped_column(Float)
     fill_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    #: P&L réalisé, tel que calculé par le BROKER — renseigné uniquement sur
+    #: une sortie de position (une entrée n'a pas encore de résultat).
+    pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="PENDING")

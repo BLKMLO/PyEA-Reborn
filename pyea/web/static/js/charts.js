@@ -48,6 +48,15 @@ function formatChange(pct) {
   return `${pct >= 0 ? "+" : ""}${pct.toFixed(2)} %`;
 }
 
+// Date locale à partir d'un horodatage serveur. Le serveur envoie désormais
+// un fuseau explicite ; on tolère une valeur sans fuseau (base écrite par une
+// version antérieure) en la lisant comme de l'UTC — jamais comme du local.
+function formatUtcDate(iso) {
+  if (!iso) return "";
+  const stamped = /[Zz]|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : `${iso}Z`;
+  return new Date(stamped).toLocaleDateString();
+}
+
 // --- Graphique (TradingView Lightweight Charts) ----------------------------
 // Pan/zoom natifs ; on remonte le passé par pagination : quand l'utilisateur
 // approche du bord gauche, on précharge les bougies antérieures (`before=`).
@@ -331,8 +340,12 @@ function openPositionRow(p) {
     </tr>`;
 }
 
-// Trade RÉELLEMENT exécuté (journal SQL), grisé comme historique.
+// Trade RÉELLEMENT exécuté (journal SQL), grisé comme historique. Le P&L
+// n'est présent que sur les sorties de position (calculé par le broker).
 function tradeRow(t) {
+  const pnl = t.pnl == null
+    ? `<span class="text-slate-600">—</span>`
+    : `<span class="${pnlClass(t.pnl)}">${t.pnl >= 0 ? "+" : ""}${t.pnl}</span>`;
   return `
     <tr class="border-t border-slate-700/60 text-slate-500">
       <td class="py-1 pr-2 font-mono">${t.symbol}</td>
@@ -340,8 +353,8 @@ function tradeRow(t) {
       <td class="pr-2">${t.quantity}</td>
       <td class="pr-2">${t.fill_price == null ? "—" : formatPrice(t.fill_price)}</td>
       <td class="pr-2">—</td>
-      <td class="pr-2"></td>
-      <td>${t.status.toLowerCase()} ${new Date(t.executed_at).toLocaleDateString()}</td>
+      <td class="pr-2">${pnl}</td>
+      <td>${t.status.toLowerCase()} ${formatUtcDate(t.executed_at)}</td>
     </tr>`;
 }
 
@@ -364,8 +377,12 @@ async function refreshPositions() {
   const total = document.getElementById("total-pnl");
   total.textContent = `${data.total_pnl >= 0 ? "+" : ""}${data.total_pnl}`;
   total.className = `mt-1 text-2xl font-semibold ${pnlClass(data.total_pnl)}`;
-  document.getElementById("pnl-detail").textContent =
-    `${data.open.length} ouverte(s) · ${data.trades.length} trade(s) exécuté(s)`;
+  // Détail des deux composantes réelles du P&L : latent (positions ouvertes
+  // chez le broker) et réalisé (trades journalisés, P&L calculé par le broker).
+  document.getElementById("pnl-detail").innerHTML =
+    `${data.open.length} ouverte(s) · ${data.trades.length} trade(s) exécuté(s)<br>` +
+    `latent <span class="${pnlClass(data.open_pnl)}">${data.open_pnl}</span> · ` +
+    `réalisé <span class="${pnlClass(data.realized_pnl)}">${data.realized_pnl}</span>`;
 }
 
 // --- Onglets du panneau bas ------------------------------------------------

@@ -329,10 +329,16 @@ async def get_positions() -> dict[str, Any]:
                 }
             )
     executed_trades = list_recent_trades()  # journal réel (vide sans broker)
+    # P&L total = latent des positions ouvertes (broker) + réalisé des trades
+    # journalisés (P&L calculé par le broker sur les sorties). Les deux
+    # sources sont réelles ; rien n'est estimé par PyEA.
     open_pnl = sum(p["pnl"] or 0 for p in open_positions)
+    realized_pnl = sum(t["pnl"] or 0 for t in executed_trades)
     return {
         "broker_connected": broker_runtime.is_connected(),
         "open": open_positions,
         "trades": executed_trades,  # plus récents d'abord
-        "total_pnl": round(open_pnl, 2),
+        "open_pnl": round(open_pnl, 2),
+        "realized_pnl": round(realized_pnl, 2),
+        "total_pnl": round(open_pnl + realized_pnl, 2),
     }

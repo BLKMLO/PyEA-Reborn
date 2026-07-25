@@ -17,6 +17,20 @@ from pyea.storage.storage_database import get_session
 from pyea.storage.storage_models import TrainingRun
 
 
+def _as_utc_iso(moment: datetime) -> str:
+    """ISO 8601 avec fuseau EXPLICITE (``...+00:00``).
+
+    SQLite ne stocke pas le fuseau : SQLAlchemy relit un datetime NAÏF même
+    pour une colonne ``DateTime(timezone=True)``. Sérialisé tel quel, le
+    navigateur l'interprétait en heure LOCALE — un trade de 23 h 30 UTC
+    s'affichait au lendemain pour un utilisateur en UTC+2. On réattache donc
+    l'UTC dans lequel la valeur a été écrite (cf. ``_utcnow`` des modèles).
+    """
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.isoformat()
+
+
 def create_run(
     run_id: str,
     strategy_name: str,
@@ -70,7 +84,7 @@ def list_runs(limit: int = 50) -> list[dict[str, Any]]:
         return [
             {
                 "id": run.id,
-                "created_at": run.created_at.isoformat(),
+                "created_at": _as_utc_iso(run.created_at),
                 "strategy": run.strategy_name,
                 "symbol": run.symbol,
                 "timeframe": run.timeframe,

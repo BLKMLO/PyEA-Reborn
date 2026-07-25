@@ -21,11 +21,14 @@ sandbox n'a ni le paquet ni un terminal IB.
 Livrés ici : cycle de vie (``connect``/``disconnect``/``is_connected``),
 lecture de compte (``get_positions``/``get_account_summary``), **routage
 d'ordres** (``place_order`` en bracket natif Market + TP/SL attachés OCO,
-``cancel_order``) et **flux de prix** (``subscribe_market_data`` via
-``reqMktData``). Comme la connexion, order routing et feed exigent un TWS /
-IB Gateway réel : ils sont écrits sur le même modèle prudent (import
-paresseux, échec honnête si déconnecté — jamais d'ordre ni de tick simulé)
-et **restent à valider chez l'utilisateur** au premier run réel. Les
+``cancel_order``), **flux de prix** (``subscribe_market_data`` via
+``reqMktData``) et **comptes rendus d'exécution** (``orderStatusEvent`` :
+c'est ce qui referme la boucle — PyEA apprend ce que TWS a fait de ses
+ordres, y compris les sorties déclenchées par les enfants TP/SL du bracket).
+Comme la connexion, order routing et feed exigent un TWS / IB Gateway
+réel : ils sont écrits sur le même modèle prudent (import paresseux, échec
+honnête si déconnecté — jamais d'ordre, de tick ni de fill simulé) et
+**restent à valider chez l'utilisateur** au premier run réel. Les
 instruments supportés sont les paires **forex / métaux à 6 lettres**
 (EURUSD, XAUUSD…) ; les indices (US500) restent à câbler (contrat non
 forex) et sont signalés par une erreur claire.
@@ -44,7 +47,14 @@ from pyea.brokers.broker_gateway import (
     register_gateway,
 )
 from pyea.config.config_settings import Settings
-from pyea.core.core_domain import OrderRequest, OrderSide, Position
+from pyea.core.core_domain import (
+    ExecutionReport,
+    ExecutionStatus,
+    OrderRequest,
+    OrderSide,
+    Position,
+    TickData,
+)
 from pyea.core.core_logging import get_logger
 
 logger = get_logger(__name__)
@@ -61,6 +71,16 @@ _ACCOUNT_TAGS = {
     "FullMaintMarginReq": "margin",
     "AvailableFunds": "margin_free",
     "UnrealizedPnL": "profit",
+}
+
+#: Statuts d'ordre IB TERMINAUX → sort normalisé. Les autres (PreSubmitted,
+#: Submitted, PendingCancel…) décrivent un ordre encore vivant : on ne
+#: rapporte rien tant que TWS n'a pas tranché.
+_TERMINAL_STATUSES = {
+    "Filled": ExecutionStatus.FILLED,
+    "Cancelled": ExecutionStatus.CANCELLED,
+    "ApiCancelled": ExecutionStatus.CANCELLED,
+    "Inactive": ExecutionStatus.REJECTED,
 }
 
 
@@ -94,6 +114,13 @@ class InteractiveBrokersGateway(BrokerGateway):
         self._ib: Any | None = None  # instance ib_async.IB une fois connectée
         # Souscriptions de marché vivantes : symbole → (contrat, ticker, handler).
         self._md: dict[str, tuple[Any, Any, Any]] = {}
+        # Tâches planifiées depuis les callbacks SYNCHRONES d'ib_async. Sans
+        # référence retenue, asyncio ne garde qu'une référence FAIBLE : le
+        # ramasse-miettes peut annuler un tick ou un compte rendu en plein vol.
+        self._pending: set[Any] = set()
+        # Ordres déjà rapportés (un statut terminal peut être notifié plusieurs
+        # fois par TWS) : on ne journalise jamais deux fois le même trade.
+        self._reported: set[int] = set()
 
     def connection_info(self) -> dict[str, str]:
         return {
@@ -136,6 +163,11 @@ class InteractiveBrokersGateway(BrokerGateway):
                 "correct (7497 paper / 7496 live)."
             ) from exc
         self._ib = ib
+        # Comptes rendus d'exécution : TWS notifie chaque changement de statut
+        # d'ordre (y compris les enfants TP/SL du bracket, donc les SORTIES).
+        # C'est ce qui referme la boucle live — sans ça, PyEA soumet des ordres
+        # et n'apprend jamais ce qu'ils sont devenus.
+        ib.orderStatusEvent += self._on_order_status
         account = ", ".join(ib.managedAccounts()) or "?"
         logger.info(
             "Interactive Brokers connecté — %s:%s (client %s), compte(s) %s.",
@@ -144,9 +176,57 @@ class InteractiveBrokersGateway(BrokerGateway):
 
     async def disconnect(self) -> None:
         if self._ib is not None:
+            try:
+                self._ib.orderStatusEvent -= self._on_order_status
+            except Exception:  # pragma: no cover - défensif (event déjà nettoyé)
+                pass
             self._ib.disconnect()  # synchrone côté ib_async : coupe tous les flux
             self._ib = None
         self._md.clear()
+        self._pending.clear()
+        self._reported.clear()
+
+    def _schedule(self, coro: Any) -> None:
+        """Planifie une coroutine depuis un callback ib_async SYNCHRONE.
+
+        La référence est retenue jusqu'à la fin de la tâche : ``ensure_future``
+        seul ne crée qu'une référence faible, et une tâche ramassée en plein
+        vol perdrait silencieusement un tick ou un compte rendu d'exécution.
+        """
+        task = asyncio.ensure_future(coro)
+        self._pending.add(task)
+        task.add_done_callback(self._pending.discard)
+
+    # --- Comptes rendus d'exécution ---
+    def _on_order_status(self, trade: Any) -> None:
+        """Callback TWS (synchrone) : un ordre a changé d'état.
+
+        On ne rapporte que les états TERMINAUX, et une seule fois par ordre.
+        Le prix retenu est ``avgFillPrice`` — celui du broker, jamais reconstruit.
+        """
+        status = getattr(trade.orderStatus, "status", "")
+        mapped = _TERMINAL_STATUSES.get(status)
+        if mapped is None:
+            return  # PreSubmitted, Submitted… : l'ordre vit encore
+        order_id = int(trade.order.orderId)
+        if order_id in self._reported:
+            return  # TWS renotifie volontiers le même statut terminal
+        self._reported.add(order_id)
+        contract = trade.contract
+        filled = float(getattr(trade.orderStatus, "filled", 0.0) or 0.0)
+        price = getattr(trade.orderStatus, "avgFillPrice", None)
+        report = ExecutionReport(
+            order_id=str(order_id),
+            symbol=contract.localSymbol or contract.symbol,
+            side=OrderSide.BUY if trade.order.action == "BUY" else OrderSide.SELL,
+            quantity=filled if filled else float(trade.order.totalQuantity),
+            status=mapped,
+            fill_price=float(price) if price else None,
+            # IB ne porte pas le P&L réalisé sur le statut d'ordre (il vit dans
+            # le rapport de PnL du compte) : on ne l'invente pas.
+            pnl=None,
+        )
+        self._schedule(self._emit_execution(report))
 
     def is_connected(self) -> bool:
         if self._ib is None:
@@ -296,7 +376,7 @@ class InteractiveBrokersGateway(BrokerGateway):
                 volume=float(volume) if volume and math.isfinite(volume) else None,
                 timestamp=updated.time or datetime.now(timezone.utc),
             )
-            asyncio.ensure_future(on_tick(tick))
+            self._schedule(on_tick(tick))
 
         ticker.updateEvent += _handler
         self._md[symbol] = (contract, ticker, _handler)

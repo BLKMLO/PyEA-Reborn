@@ -88,3 +88,39 @@ class Position:
     quantity: float
     average_price: float
     unrealized_pnl: float | None = None
+
+
+class ExecutionStatus(str, Enum):
+    """Sort d'un ordre, tel que RAPPORTÉ par le broker (jamais déduit).
+
+    Les trois états sont TERMINAUX : un ordre qui en reçoit un ne bougera
+    plus, il libère donc sa réservation d'ordre en vol côté moteur.
+    """
+
+    FILLED = "FILLED"
+    CANCELLED = "CANCELLED"
+    REJECTED = "REJECTED"
+
+
+@dataclass(frozen=True)
+class ExecutionReport:
+    """Compte rendu d'exécution émis par la gateway quand le broker a tranché.
+
+    C'est le chaînon qui referme la boucle du flux live : ``place_order`` ne
+    fait que SOUMETTRE, le broker exécute (ou refuse), et la gateway republie
+    ici ce qui s'est réellement passé. PyEA ne fabrique JAMAIS un
+    ``ExecutionReport`` : il naît d'un callback broker (IB) ou d'un deal
+    réellement présent dans l'historique du terminal (MetaTrader).
+
+    ``pnl`` n'est renseigné que pour une sortie de position (le broker le
+    calcule) ; il reste ``None`` sur une entrée.
+    """
+
+    order_id: str
+    symbol: str
+    side: OrderSide
+    quantity: float
+    status: ExecutionStatus
+    fill_price: float | None = None
+    pnl: float | None = None
+    timestamp: datetime = field(default_factory=_utcnow)
