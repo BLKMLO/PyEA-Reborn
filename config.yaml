@@ -50,6 +50,20 @@ risk:
   max_positions_per_symbol: 1
   max_open_positions: 1
 
+costs:
+  # Coûts de transaction appliqués au backtest. Sans eux, un aller-retour est
+  # GRATUIT — ce qui n'existe pas, et rend tout résultat optimiste.
+  #
+  # Le SPREAD n'est pas réglé ici : il est MESURÉ dans les données (médiane de
+  # ask_close - bid_close), donc réaliste selon la paire et la période. Un
+  # aller-retour paie exactement un spread. Si l'historique n'a pas de colonnes
+  # ask, aucun spread n'est modélisé et l'interface le SIGNALE.
+  #
+  # Commission du courtier, par côté et par unité tradée, en unités de PRIX
+  # (même échelle que le spread). 0 = courtier « spread only », le plus courant
+  # en forex retail.
+  commission_per_unit: 0.0
+
 history:
   # Données historiques M1 (Dukascopy) pour le backtest — voir
   # download_history.py. Année de départ réglable (2010 = défaut voulu).

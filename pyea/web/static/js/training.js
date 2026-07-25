@@ -253,11 +253,30 @@ function renderTraining(report) {
 
   document.getElementById("tr-stats").innerHTML =
     statCard("Trades OOS", stats.trades) +
-    statCard("P&L OOS", stats.total_pnl, true) +
+    // NET de spread et commission : c'est le chiffre qui décide si la paire
+    // vaut la peine d'être tradée.
+    statCard("P&L OOS net", stats.total_pnl, true) +
+    statCard("Coûts OOS", stats.costs_modelled
+      ? `−${Number(stats.total_costs).toFixed(5)}` : "non modélisés") +
     statCard("Taux de gain OOS", stats.win_rate === null ? null : `${(stats.win_rate * 100).toFixed(1)} %`) +
     statCard("Drawdown max OOS", stats.max_drawdown) +
     // Profit factor agrégé (gains bruts / pertes brutes sur tous les trades OOS).
     statCard("Profit factor OOS", stats.profit_factor == null ? null : stats.profit_factor.toFixed(2));
+  // Sans colonnes ask dans l'historique, le résultat OOS est optimiste : le
+  // dire franchement vaut mieux qu'un zéro trompeur.
+  const warn = document.getElementById("tr-cost-note");
+  if (warn) {
+    if (stats.costs_modelled) {
+      warn.className = "hidden";
+      warn.textContent = "";
+    } else {
+      warn.className =
+        "rounded border border-amber-700/60 bg-amber-900/20 px-3 py-2 text-[11px] text-amber-300";
+      warn.textContent =
+        "⚠ Aucun coût de transaction modélisé (historique sans colonnes ask) : " +
+        "ces résultats out-of-sample sont OPTIMISTES.";
+    }
+  }
 
   const curve = report.oos_equity_curve || [];
   if (oosEquityChart) oosEquityChart.destroy();

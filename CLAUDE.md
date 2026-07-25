@@ -162,6 +162,17 @@ jamais commité — modèle dans `.env.example`).
   pas le live), résultats = cartes stats (bougies, trades, P&L, taux de
   gain, drawdown max **+ Sharpe / SQN / profit factor**), courbe d'équité
   (Chart.js) et table des trades.
+  **Coûts de transaction modélisés** : le spread est MESURÉ dans les données
+  (médiane de `ask_close - bid_close` ; le téléchargeur stocke les deux côtés
+  depuis toujours, le moteur ne lisait que le bid — un aller-retour était donc
+  GRATUIT) et facturé en coût fixe par côté, donc un aller-retour paie
+  exactement un spread ; + commission optionnelle `costs.commission_per_unit`.
+  Toutes les stats (P&L, profit factor, Sharpe, taux de gain) sont NETTES ;
+  `gross_pnl` et `total_costs` sont exposés à côté. Historique sans colonnes
+  ask → `costs_modelled: false` et l'UI affiche un bandeau ambre « résultat
+  OPTIMISTE » plutôt qu'un zéro trompeur. Approximation résiduelle assumée :
+  pour un SHORT, la sortie est un achat à l'ask, donc le départage d'un
+  franchissement quasi simultané peut différer (le coût total, lui, est exact).
   Moteur : `pyea/backtest/backtest_engine.py` — **adossé à backtrader**
   (moteur événementiel éprouvé, GPLv3, pur Python, **vendorisé dans
   `lib/backtrader/`**, zéro install). L'`BacktestEngine`/`BacktestResult`
@@ -428,6 +439,42 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
    sélection du modèle par actif) : le flux live est complet de bout en bout.
 
 ## Journal de décisions
+
+- **2026-07-25 (coûts)** — **Spread et commission modélisés dans le backtest**
+  (proposition d'amélioration retenue par l'utilisateur). **Le trou le plus
+  grave restant** : les colonnes `ask_*` étaient téléchargées et stockées
+  depuis le début, puis **jamais lues** — moteur, features et labeling
+  tournaient intégralement sur le bid. Un backtest achetait donc au bid et
+  revendait au bid : un aller-retour GRATUIT, qui n'existe pas. Aucune
+  commission non plus (`setcommission` jamais appelé). Décisions : (1) le
+  spread n'est PAS un réglage mais une MESURE (`measure_spread` = médiane de
+  `ask_close - bid_close` sur la période backtestée) — réaliste par paire et
+  par période, et impossible à « optimiser » ; **médiane** et non moyenne, le
+  spread explosant à l'ouverture et sur les annonces. (2) Coût facturé en
+  **COMM_FIXED par côté** (demi-spread × 2) plutôt qu'en décalant les prix :
+  les barrières restent remplies au prix EXACT, ce qui est correct puisque le
+  flux est en bid (un long sort au bid, un short entre au bid). Approximation
+  résiduelle documentée : la sortie d'un short est un achat à l'ask, donc son
+  départage intrabar peut différer d'un spread — le coût total, lui, est exact.
+  (3) **Honnêteté** : sans colonnes ask, aucun coût n'est inventé,
+  `costs_modelled: false`, et les deux pages affichent un bandeau ambre
+  « résultat OPTIMISTE ». (4) `trade.pnlcomm` (net) devient le P&L de
+  référence ; `gross_pnl` et `cost` sont conservés par trade pour le
+  diagnostic, et la reconstruction du prix de sortie continue d'utiliser le
+  BRUT (les coûts ne déplacent pas le prix touché). (5) Commission en config
+  (`costs.commission_per_unit`, par côté et par unité, en unités de prix), 0
+  par défaut = courtier « spread only ». **Mesuré** : sur l'historique
+  synthétique local, un spread de 1 pip mange ~11 % du P&L brut et fait passer
+  le profit factor de 3,37 à 2,88 ; et sur le jeu 2010-2026 sans edge, le
+  walk-forward passe d'un brut légèrement POSITIF (+0,019) à un net NÉGATIF
+  (−0,160) — profit factor 0,88. C'est exactement l'effet attendu : le spread
+  est ce qui sépare « ça a l'air de marcher » de « ça marche ». **6 tests
+  ajoutés, 172 verts** ; les deux pages vérifiées au navigateur. **Conséquences
+  traitées** : `config.yaml` (section `costs`), `config_settings`,
+  `api_backtest`/`api_training` (passent la commission), `run_walkforward`
+  (paramètre + `total_costs`/`costs_modelled` dans `oos_stats`),
+  `docs/architecture.md`, cartes « Coûts » sur les pages Backtest ET
+  Entraînement.
 
 - **2026-07-25 (suite)** — **Passe d'audit, points 9 à 20** (le reste de la
   liste). (9) **Chauffe OOS récupérée** : `BacktestEngine.run` accepte un

@@ -110,6 +110,39 @@ function statCard(label, value, colored) {
     </div>`;
 }
 
+// Coûts payés (spread + commission). Sans données ask, rien n'est modélisé :
+// on le dit franchement plutôt que d'afficher un zéro trompeur.
+function costLabel(stats) {
+  if (!stats.costs_modelled) return "non modélisés";
+  return `−${Number(stats.total_costs).toFixed(5)}`;
+}
+
+// Bandeau sous les cartes : d'où vient le spread, et ce qu'il coûte face au
+// P&L brut. C'est l'écart entre « ça a l'air de marcher » et « ça marche ».
+function renderCostNote(stats) {
+  const note = document.getElementById("bt-cost-note");
+  if (!note) return;
+  if (!stats.costs_modelled) {
+    note.className = "rounded border border-amber-700/60 bg-amber-900/20 px-3 py-2 text-[11px] text-amber-300";
+    note.textContent =
+      "⚠ Aucun coût de transaction modélisé : cet historique n'a pas de colonnes " +
+      "ask (spread). Le résultat est donc OPTIMISTE — re-téléchargez les données " +
+      "pour obtenir un chiffre réaliste.";
+    note.classList.remove("hidden");
+    return;
+  }
+  const gross = Number(stats.gross_pnl);
+  const costs = Number(stats.total_costs);
+  const part = gross > 0 ? ` — soit ${((costs / gross) * 100).toFixed(0)} % du P&L brut` : "";
+  note.className = "rounded border border-slate-700 bg-slate-800/60 px-3 py-2 text-[11px] text-slate-400";
+  note.textContent =
+    `Spread médian mesuré dans les données : ${stats.spread} ` +
+    `(commission ${stats.commission_per_unit} par côté). ` +
+    `P&L brut ${gross.toFixed(5)} − coûts ${costs.toFixed(5)} = net ` +
+    `${Number(stats.total_pnl).toFixed(5)}${part}.`;
+  note.classList.remove("hidden");
+}
+
 function renderResults(result) {
   const stats = result.stats;
   document.getElementById("bt-empty").classList.add("hidden");
@@ -121,13 +154,16 @@ function renderResults(result) {
   document.getElementById("bt-stats").innerHTML =
     statCard("Bougies", stats.bars) +
     statCard("Trades", stats.trades) +
-    statCard("P&L total", stats.total_pnl, true) +
+    // P&L NET de spread et commission — le seul chiffre qui compte.
+    statCard("P&L net", stats.total_pnl, true) +
+    statCard("Coûts", costLabel(stats)) +
     statCard("Taux de gain", pct1(stats.win_rate)) +
     statCard("Drawdown max", stats.max_drawdown) +
     // Métriques fournies par backtrader (moteur d'exécution).
     statCard("Sharpe", num2(stats.sharpe_ratio)) +
     statCard("SQN", num2(stats.sqn)) +
     statCard("Profit factor", num2(stats.profit_factor));
+  renderCostNote(stats);
 
   if (equityChart) equityChart.destroy();
   equityChart = new Chart(document.getElementById("bt-equity"), {

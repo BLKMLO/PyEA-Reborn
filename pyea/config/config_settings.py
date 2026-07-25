@@ -76,6 +76,10 @@ class Settings(BaseSettings):
     # paire) et sur le compte (exposition totale).
     risk_max_positions_per_symbol: int = Field(default=1, ge=1)
     risk_max_open_positions: int = Field(default=1, ge=1)
+    # Commission du courtier, PAR CÔTÉ et par unité tradée, en unités de PRIX.
+    # Le SPREAD n'est PAS réglable : il est mesuré dans les données (colonnes
+    # ask_*), donc réaliste par paire et par période.
+    costs_commission_per_unit: float = Field(default=0.0, ge=0)
     history_data_dir: str = "./data/history"
     history_start_year: int = Field(default=2010, ge=1990, le=2100)
     history_instruments: list[str] = ["EURUSD"]
@@ -115,6 +119,7 @@ def _yaml_overrides(raw: dict[str, Any]) -> dict[str, Any]:
     strategy = raw.get("strategy", {})
     risk = raw.get("risk", {})
     ui = raw.get("ui", {})
+    costs = raw.get("costs", {})
     history = raw.get("history", {})
     storage = raw.get("storage", {})
     logging_cfg = raw.get("logging", {})
@@ -132,6 +137,7 @@ def _yaml_overrides(raw: dict[str, Any]) -> dict[str, Any]:
         "risk_max_daily_loss_pct": risk.get("max_daily_loss_pct"),
         "risk_max_positions_per_symbol": risk.get("max_positions_per_symbol"),
         "risk_max_open_positions": risk.get("max_open_positions"),
+        "costs_commission_per_unit": costs.get("commission_per_unit"),
         "history_data_dir": history.get("data_dir"),
         "history_start_year": history.get("start_year"),
         "history_instruments": history.get("instruments"),

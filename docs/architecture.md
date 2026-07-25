@@ -55,7 +55,9 @@ PyEA-Reborn/
 │   │                                      # non modélisée en backtest — cf. son docstring).
 │   │
 │   ├── backtest/
-│   │   └── backtest_engine.py             # Rejoue l'historique via le flux complet
+│   │   └── backtest_engine.py             # Coûts : spread MESURÉ dans les données (ask - bid)
+│   │                                      # + commission ; un aller-retour paie un spread.
+│   │                                      # Rejoue l'historique via le flux complet
 │   │                                      # Strategy → RiskManager → backtrader (exécution +
 │   │                                      # métriques : Sharpe/SQN/profit factor). Barrières
 │   │                                      # TP/SL (Stop/Limit OCO), clôture fin de semaine.
