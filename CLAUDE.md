@@ -58,6 +58,16 @@ jamais commité — modèle dans `.env.example`).
   TradingView Lightweight Charts (chandeliers, pan/zoom, historique
   paginé) ; Chart.js réservé aux futurs graphiques classiques (P&L,
   distributions).
+- **Front : un seul scope global.** Les pages chargent des `<script>`
+  classiques, pas des modules ES. `static/js/ui.js` est le socle partagé
+  (formats, préférences localStorage, cartes de stats, tables triables, export
+  CSV, bandeau d'état, horloge UTC, raccourcis) : il est enfermé dans une
+  **IIFE** et n'expose que `window.PyEA` ; les scripts de page destructurent ce
+  qu'ils utilisent et ne redéfinissent jamais un helper du socle. Un `const` de
+  page homonyme d'une `function` du socle lève une `SyntaxError` qui empêche le
+  script de page de s'exécuter ENTIÈREMENT (page morte, pas dégradée) — et
+  `node --check` ne le voit pas. Toujours vérifier les 3 pages au navigateur,
+  console ouverte.
 - Libs front (Tailwind, HTMX, Lightweight Charts, Chart.js)
   **vendorisées** dans `pyea/web/static/vendor/` — jamais de CDN au
   runtime (le dashboard doit marcher sur un VPS sans internet sortant).
@@ -439,6 +449,36 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
    sélection du modèle par actif) : le flux live est complet de bout en bout.
 
 ## Journal de décisions
+
+- **2026-07-25 (socle UI)** — **Refonte front partagée terminée** (le travail
+  avait été commencé par une session concurrente écrivant dans le même
+  répertoire, puis laissé à mi-chemin ; commit `4841563` l'a préservé tel quel,
+  celui-ci le finit — sur feu vert de l'utilisateur). **Le problème** : les
+  scripts de page sont des `<script>` CLASSIQUES et partagent donc un seul
+  scope lexical global. `ui.js` déclarait `const prefs`, `function num2`,
+  `function formatPrice`… au global, pendant que `charts.js` faisait
+  `const { prefs, formatPrice… } = window.PyEA` — collision `const`/`function`
+  → `SyntaxError` → le script de page ne s'exécutait PLUS DU TOUT. La page Live
+  était morte, la page Entraînement aussi. **Correctif** : (1) `ui.js` enfermé
+  dans une **IIFE**, n'exposant que `window.PyEA` ; (2) `training.js` et
+  `backtest.js` migrés au même motif de destructuration que `charts.js`, avec
+  suppression de leurs helpers dupliqués (`fillSelect`, `statCard`,
+  `apiErrorText`, `num2`, `pct1` — chacun existait en deux ou trois
+  exemplaires). Attention à la signature : le `statCard` du socle prend un
+  objet d'options (`{ colored: true }`), pas un booléen. (3) Câblé ce que le
+  socle ANNONÇAIT sans le faire : `loadHeaderStatus()` sur Backtest et
+  Entraînement (le bandeau mode/broker/stratégie est désormais sur les TROIS
+  pages — un broker qui tombe pendant un entraînement se voit sans revenir sur
+  Live) et `rememberForm` sur les deux formulaires (relancer un run en changeant
+  un seul paramètre ne demande plus de tout re-saisir). **Leçon consignée en
+  convention** : `node --check` ne détecte AUCUNE de ces collisions (il analyse
+  chaque fichier isolément) — seul un chargement navigateur les révèle, d'où la
+  règle « vérifier les 3 pages, console ouverte » après toute modif front.
+  **Restent sans appelant** dans le socle : `signed` et `formatDuration`
+  (utilitaires, pas du câblage trompeur — laissés en l'état et signalés).
+  Vérifié au navigateur : 3 pages OK, backtest et entraînement complets, zéro
+  erreur console. 172 tests Python toujours verts (aucun ne couvre le JS —
+  angle mort assumé).
 
 - **2026-07-25 (coûts)** — **Spread et commission modélisés dans le backtest**
   (proposition d'amélioration retenue par l'utilisateur). **Le trou le plus

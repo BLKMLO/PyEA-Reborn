@@ -16,9 +16,19 @@
  *    clôture de fin de semaine ISO — l'heure locale induirait en erreur) ;
  *  - raccourcis clavier + aide « ? » ;
  *  - registre des fenêtres modales pour la touche Échap.
+ *
+ * PORTÉE — important : les scripts de PyEA sont des <script> CLASSIQUES, pas
+ * des modules ES ; ils partagent donc le même scope lexical global. Tout ce
+ * fichier est enfermé dans une IIFE et n'expose QUE `window.PyEA` : sans
+ * cela, un `const prefs` ici et un `const { prefs } = window.PyEA` dans une
+ * page se télescopaient (« Identifier 'prefs' has already been declared »),
+ * ce qui empêchait le script de page de s'exécuter ENTIÈREMENT. Les pages
+ * récupèrent ce dont elles ont besoin par destructuration de `window.PyEA`.
  */
 
 "use strict";
+
+(function () {
 
 // --- Préférences d'interface (localStorage) ---------------------------------
 // Uniquement du confort d'affichage : symbole actif, tri de la watchlist,
@@ -491,3 +501,4 @@ window.PyEA = {
   exportTableCsv,
   registerOverlay,
 };
+})();

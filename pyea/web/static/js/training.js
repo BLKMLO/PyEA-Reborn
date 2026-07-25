@@ -12,47 +12,18 @@
 
 "use strict";
 
+// Socle partagé (ui.js) : formats, formulaires, cartes, tables triables.
+// Destructuration — ui.js est enfermé dans une IIFE et n'expose que window.PyEA,
+// pour qu'aucun nom ne se télescope entre les scripts de page (ils partagent
+// tous le même scope global, ce ne sont pas des modules ES).
+const {
+  fillSelect, statCard, apiErrorText, num2, pct1, shortStamp,
+  loadHeaderStatus, rememberForm,
+} = window.PyEA;
+
 let currentJobId = null;
 let pollTimer = null;
 let oosEquityChart = null;
-
-// --- Helpers ---------------------------------------------------------------
-
-function fillSelect(id, values, selected) {
-  const select = document.getElementById(id);
-  select.innerHTML = "";
-  for (const value of values) {
-    const option = document.createElement("option");
-    option.value = value;
-    option.textContent = value;
-    if (value === selected) option.selected = true;
-    select.appendChild(option);
-  }
-}
-
-function statCard(label, value, colored) {
-  const color = !colored ? "text-slate-100"
-    : value >= 0 ? "text-emerald-400" : "text-red-400";
-  return `
-    <div class="rounded-lg bg-slate-800 p-3">
-      <div class="text-[11px] uppercase tracking-wide text-slate-500">${label}</div>
-      <div class="mt-1 text-lg font-semibold ${color}">${value ?? "—"}</div>
-    </div>`;
-}
-
-const num2 = (v) => (v === null || v === undefined ? "—" : v.toFixed(2));
-
-// Erreur API lisible : FastAPI renvoie soit une chaîne (HTTPException),
-// soit un tableau d'objets (erreur de validation 422) — sans ce garde-fou,
-// l'utilisateur voyait « [object Object] ».
-function apiErrorText(payload) {
-  const detail = payload && payload.detail;
-  if (typeof detail === "string") return detail;
-  if (Array.isArray(detail)) {
-    return detail.map(e => `${(e.loc || []).join(".")} : ${e.msg}`).join(" ; ");
-  }
-  return "erreur inattendue du serveur.";
-}
 
 // --- Formulaire + définition du modèle -------------------------------------
 
@@ -255,13 +226,13 @@ function renderTraining(report) {
     statCard("Trades OOS", stats.trades) +
     // NET de spread et commission : c'est le chiffre qui décide si la paire
     // vaut la peine d'être tradée.
-    statCard("P&L OOS net", stats.total_pnl, true) +
+    statCard("P&L OOS net", stats.total_pnl, { colored: true }) +
     statCard("Coûts OOS", stats.costs_modelled
       ? `−${Number(stats.total_costs).toFixed(5)}` : "non modélisés") +
-    statCard("Taux de gain OOS", stats.win_rate === null ? null : `${(stats.win_rate * 100).toFixed(1)} %`) +
+    statCard("Taux de gain OOS", pct1(stats.win_rate)) +
     statCard("Drawdown max OOS", stats.max_drawdown) +
     // Profit factor agrégé (gains bruts / pertes brutes sur tous les trades OOS).
-    statCard("Profit factor OOS", stats.profit_factor == null ? null : stats.profit_factor.toFixed(2));
+    statCard("Profit factor OOS", num2(stats.profit_factor));
   // Sans colonnes ask dans l'historique, le résultat OOS est optimiste : le
   // dire franchement vaut mieux qu'un zéro trompeur.
   const warn = document.getElementById("tr-cost-note");
@@ -283,7 +254,7 @@ function renderTraining(report) {
   oosEquityChart = new Chart(document.getElementById("tr-equity"), {
     type: "line",
     data: {
-      labels: curve.map(p => p.time.slice(0, 16).replace("T", " ")),
+      labels: curve.map(p => shortStamp(p.time)),
       datasets: [{
         label: "Équité OOS",
         data: curve.map(p => p.equity),
@@ -333,7 +304,7 @@ async function loadRuns() {
     ? data.runs.map(run => `
         <tr class="border-t border-slate-700/60 ${run.status !== "completed" ? "text-slate-500" : ""}">
           <td class="py-1 pr-2 font-mono">${run.id}</td>
-          <td class="pr-2">${run.created_at.slice(0, 16).replace("T", " ")}</td>
+          <td class="pr-2">${shortStamp(run.created_at)}</td>
           <td class="pr-2">${run.symbol}</td>
           <td class="pr-2">${run.timeframe}</td>
           <td class="pr-2">${run.folds}</td>
@@ -349,7 +320,15 @@ async function loadRuns() {
 // --- Init ------------------------------------------------------------------
 
 document.addEventListener("DOMContentLoaded", async () => {
+  // Bandeau d'état sur CETTE page aussi : un broker qui tombe pendant un
+  // entraînement doit se voir sans revenir sur la page Live. Pas de callback
+  // broker ici — la connexion ne se pilote que depuis la page Live.
+  loadHeaderStatus();
   await loadDatasets();
+  // Les champs sont restaurés APRÈS le remplissage des <select> (une valeur
+  // n'est reprise que si l'option existe encore).
+  rememberForm("training", ["tr-symbol", "tr-timeframe", "tr-strategy",
+                            "tr-start", "tr-end", "tr-folds"]);
   loadModelDefinition(document.getElementById("tr-strategy").value);
   loadRuns();
   initTrainingWebSocket();

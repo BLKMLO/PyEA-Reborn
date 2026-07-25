@@ -144,6 +144,28 @@ PyEA-Reborn/
    données de MARCHÉ peuvent être une démo tant que le flux réel n'est pas
    branché, et l'UI l'affiche explicitement (« DÉMO »).
 
+## Scripts front : un seul scope global
+
+Les pages chargent des `<script>` CLASSIQUES (pas des modules ES) : **tous
+partagent le même scope lexical global**. Deux règles en découlent.
+
+1. **`static/js/ui.js` est le socle partagé** (formats, préférences
+   localStorage, cartes de stats, tables triables, export CSV, bandeau d'état,
+   horloge UTC, raccourcis). Il est enfermé dans une **IIFE** et n'expose que
+   `window.PyEA` — aucun de ses noms internes ne doit atteindre le scope
+   global.
+2. **Les scripts de page destructurent ce qu'ils utilisent** :
+   `const { statCard, num2 } = window.PyEA;`. Ils ne redéfinissent jamais un
+   helper déjà fourni par le socle.
+
+Pourquoi c'est une règle et pas un style : un `const` de page et une
+`function` du socle portant le même nom lèvent une `SyntaxError`
+(« Identifier 'x' has already been declared ») qui empêche le script de page
+de s'exécuter **entièrement** — la page est morte, pas dégradée. Et
+`node --check` ne le détecte PAS (il analyse chaque fichier isolément) : seul
+un chargement navigateur le révèle. Après toute modification du front,
+vérifier les trois pages au navigateur, console ouverte.
+
 ## Conventions de nommage
 
 - **Fichiers/dossiers Python** : `snake_case`. **Classes** : `PascalCase`.
