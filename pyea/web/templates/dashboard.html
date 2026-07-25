@@ -13,15 +13,24 @@
   <div class="flex min-h-0 flex-1">
     <!-- Graphique central -->
     <main class="flex min-w-0 flex-1 flex-col p-3">
-      <div class="flex min-h-0 flex-1 flex-col rounded-lg bg-slate-800 p-3">
-        <div class="mb-2 flex items-center justify-between">
-          <div class="flex items-center gap-3">
-            <h2 id="chart-title" class="text-base font-medium">—</h2>
+      <div class="flex min-h-0 flex-1 flex-col rounded-lg border border-slate-700/60 bg-slate-800 p-3">
+        <div class="mb-2 flex items-center justify-between gap-3">
+          <div class="flex min-w-0 items-center gap-3">
+            <h2 id="chart-title" class="truncate text-base font-medium">—</h2>
+            <!-- Variation 24 h de la paire affichée, reprise de la watchlist :
+                 le titre seul ne disait pas si la paire monte ou descend. -->
+            <span id="chart-change" class="font-mono text-xs"></span>
             <!-- Interrupteur de trading de la paire affichée : état vérifié
                  à chaque changement d'onglet (géré par charts.js). -->
             <button id="trading-toggle" class="hidden rounded px-3 py-0.5 text-xs font-semibold"></button>
           </div>
-          <span id="chart-updated" class="text-xs text-slate-500"></span>
+          <div class="flex shrink-0 items-center gap-2">
+            <button id="chart-fit" type="button" title="Réinitialiser le zoom sur les dernières bougies"
+                    class="rounded border border-slate-600 px-2 py-0.5 text-[11px] text-slate-300 hover:bg-slate-700">
+              Recadrer
+            </button>
+            <span id="chart-updated" class="text-xs text-slate-500"></span>
+          </div>
         </div>
         <div id="price-chart" class="relative min-h-0 flex-1">
           <!-- Légende OHLC en surimpression (façon TradingView) : suit le
@@ -30,18 +39,41 @@
           <div id="chart-legend"
                class="pointer-events-none absolute left-2 top-2 z-10 hidden rounded bg-slate-900/70 px-2 py-1 font-mono text-[11px] leading-tight backdrop-blur">
           </div>
+          <!-- Squelette de chargement : un bloc gris animé se lit mieux qu'un
+               graphique vide pendant le fetch initial. -->
           <div id="chart-loading"
-               class="absolute inset-0 z-10 flex items-center justify-center text-sm text-slate-500">
-            Chargement…
+               class="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-slate-800/80 text-sm text-slate-500">
+            <div class="h-1 w-40 animate-pulse rounded bg-slate-600"></div>
+            <span>Chargement des bougies…</span>
           </div>
         </div>
       </div>
     </main>
 
-    <!-- Watchlist : un clic = un onglet -->
-    <aside class="flex w-56 flex-col border-l border-slate-700 bg-slate-800">
-      <div class="border-b border-slate-700 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-        Symboles
+    <!-- Watchlist : un clic = un onglet. Recherche + tri parce que la liste
+         compte 31 instruments : retrouver une paire à l'œil était pénible. -->
+    <aside class="flex w-60 shrink-0 flex-col border-l border-slate-700 bg-slate-800">
+      <div class="border-b border-slate-700 px-3 py-2">
+        <div class="mb-2 flex items-center justify-between">
+          <span class="text-xs font-semibold uppercase tracking-wide text-slate-400">Symboles</span>
+          <span id="symbol-count" class="font-mono text-[10px] text-slate-500"></span>
+        </div>
+        <input id="symbol-search" type="search" placeholder="Filtrer… (f)" autocomplete="off"
+               class="w-full rounded border border-slate-600 bg-slate-900 px-2 py-1 text-xs text-slate-100 placeholder:text-slate-600">
+        <div class="mt-2 flex items-center justify-between gap-2">
+          <select id="symbol-sort" title="Ordre d'affichage"
+                  class="w-full rounded border border-slate-600 bg-slate-900 px-1.5 py-1 text-[11px] text-slate-300">
+            <option value="symbol">A → Z</option>
+            <option value="change_desc">Hausse</option>
+            <option value="change_asc">Baisse</option>
+            <option value="trading">Armées d'abord</option>
+          </select>
+          <label class="flex shrink-0 cursor-pointer items-center gap-1 text-[11px] text-slate-400"
+                 title="N'afficher que les paires armées">
+            <input id="symbol-armed-only" type="checkbox" class="accent-emerald-500">
+            armées
+          </label>
+        </div>
       </div>
       <ul id="symbol-list" class="min-h-0 flex-1 overflow-y-auto text-sm"></ul>
       <div class="border-t border-slate-700 px-3 py-1.5 text-[11px] text-slate-500">
@@ -50,19 +82,58 @@
     </aside>
   </div>
 
+  <!-- Poignée de redimensionnement du panneau bas : la hauteur utile du
+       graphique dépend de l'écran, une hauteur figée gênait sur un portable
+       comme sur un grand moniteur. La hauteur choisie est mémorisée. -->
+  <div id="panel-resizer"
+       class="h-1 shrink-0 cursor-row-resize bg-slate-700 transition-colors hover:bg-sky-600"
+       title="Glisser pour redimensionner"></div>
+
   <!-- Panneau bas : positions / logs + P&L total -->
-  <section class="flex h-56 shrink-0 border-t border-slate-700 bg-slate-800">
+  <section id="bottom-panel" class="flex shrink-0 border-t border-slate-700 bg-slate-800" style="height: 14rem">
     <div class="flex min-w-0 flex-1 flex-col">
-      <div class="flex items-center gap-1 border-b border-slate-700 px-3 pt-1.5">
-        <button data-tab="positions" class="bottom-tab rounded-t px-3 py-1 text-sm bg-slate-700">Positions</button>
-        <button data-tab="logs" class="bottom-tab rounded-t px-3 py-1 text-sm text-slate-400 hover:text-slate-200">Logs</button>
+      <div class="flex items-center gap-2 border-b border-slate-700 px-3 pt-1.5">
+        <button data-tab="positions" class="bottom-tab rounded-t px-3 py-1 text-sm bg-slate-700">
+          Positions <span id="positions-count" class="ml-1 font-mono text-[10px] text-slate-400"></span>
+        </button>
+        <button data-tab="logs" class="bottom-tab rounded-t px-3 py-1 text-sm text-slate-400 hover:text-slate-200">
+          Logs <span id="logs-count" class="ml-1 font-mono text-[10px] text-slate-500"></span>
+        </button>
+        <div class="ml-auto flex items-center gap-3 pb-1">
+          <!-- Barres d'outils propres à chaque onglet -->
+          <div id="positions-tools" class="flex items-center gap-3">
+            <label class="flex cursor-pointer items-center gap-1 text-[11px] text-slate-400"
+                   title="N'afficher que le symbole du graphique">
+              <input id="positions-active-only" type="checkbox" class="accent-sky-500">
+              symbole affiché
+            </label>
+            <button id="positions-export" type="button"
+                    class="rounded border border-slate-600 px-2 py-0.5 text-[11px] text-slate-300 hover:bg-slate-700">
+              CSV
+            </button>
+          </div>
+          <div id="logs-tools" class="hidden items-center gap-3">
+            <input id="logs-filter" type="search" placeholder="filtrer…" autocomplete="off"
+                   class="w-32 rounded border border-slate-600 bg-slate-900 px-2 py-0.5 text-[11px] text-slate-100 placeholder:text-slate-600">
+            <label class="flex cursor-pointer items-center gap-1 text-[11px] text-slate-400"
+                   title="Suivre automatiquement les nouvelles lignes">
+              <input id="logs-autoscroll" type="checkbox" checked class="accent-sky-500">
+              suivre
+            </label>
+          </div>
+        </div>
       </div>
       <div id="tab-positions" class="min-h-0 flex-1 overflow-y-auto px-3 py-2">
-        <table class="w-full text-left text-xs">
+        <table id="positions-table" class="w-full text-left text-xs">
           <thead class="sticky top-0 bg-slate-800 text-slate-400">
             <tr>
-              <th class="py-1 pr-2">Symbole</th><th class="pr-2">Sens</th><th class="pr-2">Qté</th>
-              <th class="pr-2">Entrée / Fill</th><th class="pr-2">Prix</th><th class="pr-2">P&L</th><th>Statut</th>
+              <th class="py-1 pr-2" data-sort="text">Symbole</th>
+              <th class="pr-2" data-sort="text">Sens</th>
+              <th class="pr-2" data-sort="num">Qté</th>
+              <th class="pr-2" data-sort="num">Entrée / Fill</th>
+              <th class="pr-2" data-sort="num">Prix</th>
+              <th class="pr-2" data-sort="num">P&L</th>
+              <th data-sort="text">Statut</th>
             </tr>
           </thead>
           <tbody id="positions-body"></tbody>
@@ -70,15 +141,17 @@
         <p id="positions-empty" class="hidden py-3 text-center text-xs text-slate-500"></p>
       </div>
       <div id="tab-logs" class="hidden min-h-0 flex-1 overflow-y-auto px-3 py-2">
-        <pre id="log-lines" class="text-[11px] leading-relaxed text-slate-400"></pre>
+        <!-- Lignes colorées par niveau (ERROR rouge, WARNING ambre) : repérer
+             une erreur dans un mur de texte gris était impossible. -->
+        <div id="log-lines" class="font-mono text-[11px] leading-relaxed text-slate-400"></div>
       </div>
     </div>
     <!-- P&L total + état du compte en bas à droite. Tout vient du broker ou
          du journal SQL : déconnecté, on affiche des tirets, jamais un chiffre
          inventé. -->
-    <div class="flex w-56 flex-col items-center justify-center border-l border-slate-700 px-3">
-      <div class="text-xs uppercase tracking-wide text-slate-400">P&amp;L total</div>
-      <div id="total-pnl" class="mt-1 text-2xl font-semibold">—</div>
+    <div class="flex w-60 shrink-0 flex-col justify-center overflow-y-auto border-l border-slate-700 px-3 py-2">
+      <div class="text-center text-xs uppercase tracking-wide text-slate-400">P&amp;L total</div>
+      <div id="total-pnl" class="mt-1 text-center text-2xl font-semibold">—</div>
       <div id="pnl-detail" class="mt-1 text-center text-[11px] text-slate-500"></div>
       <dl id="account-summary"
           class="mt-3 w-full space-y-0.5 border-t border-slate-700/60 pt-2 text-[11px]"></dl>

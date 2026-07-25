@@ -2,19 +2,29 @@
  * Dashboard live PyEA — logique du graphique et des panneaux.
  *
  * Règle du projet : tout graphique est créé ici (jamais inline dans les
- * templates) et se nourrit des endpoints JSON /api/*.
+ * templates) et se nourrit des endpoints JSON /api/*. Les helpers communs
+ * aux trois pages (formats, préférences, tables triables, bandeau d'état)
+ * viennent de `ui.js` (`window.PyEA`).
  *
  * - Graphique central : TradingView Lightweight Charts (chandeliers,
  *   pan/zoom natifs). L'historique se charge par pages en défilant vers
  *   le passé ; le refresh périodique passe par series.update() et ne
- *   touche donc pas à la position de défilement.
- * - Watchlist à droite : un clic = un onglet, le graphique bascule.
+ *   touche donc pas à la position de défilement. Les trades RÉELS du
+ *   symbole affiché (journal SQL) sont posés en marqueurs.
+ * - Watchlist à droite : un clic = un onglet, recherche + tri + filtre
+ *   « armées seulement » (31 instruments : la liste brute était pénible).
  * - Seul le graphique ACTIF est rafraîchi, toutes les N secondes
  *   (N = ui.chart_refresh_seconds de config.yaml, servi par /api/status).
- * - Panneau bas : positions ouvertes + fermées (grisées), P&L total.
+ * - Panneau bas redimensionnable : positions (triables, exportables) +
+ *   logs colorés par niveau, P&L total et compte à droite.
  */
 
 "use strict";
+
+const {
+  prefs, formatPrice, pnlClass, formatUtcDate, formatUtcDateTime,
+  loadHeaderStatus, makeSortable, exportTableCsv, registerOverlay,
+} = window.PyEA;
 
 const state = {
   chart: null,          // instance LightweightCharts
@@ -24,37 +34,22 @@ const state = {
   loadingOlder: false,  // garde anti-requêtes concurrentes du lazy-load
   hovering: false,      // crosshair sur une bougie (fige la légende dessus)
   activeSymbol: null,
+  symbols: [],            // dernière charge utile de /api/symbols
+  trades: [],             // trades exécutés (journal SQL) — marqueurs du graphique
   refreshSeconds: 5,
   timer: null,
   tradingMode: "paper",   // "live" déclenche une confirmation avant d'armer
   brokerConnected: false, // aucune action de trading possible si déconnecté
   brokers: [],            // brokers disponibles (liste déroulante de la modale)
+  logLines: [],           // dernières lignes servies par /api/logs
 };
 
 const UP_COLOR = "#34d399";
 const DOWN_COLOR = "#f87171";
 
-// --- Formatage -------------------------------------------------------------
-// Nombre de décimales selon l'ordre de grandeur : 5 pour le forex
-// (0.8xxxx), 2 pour JPY / métaux / indices (>= 100). Évite d'afficher
-// « 1823.40000 » ou « 0.86 » tronqué.
-function formatPrice(value) {
-  if (value == null || Number.isNaN(value)) return "—";
-  return value >= 100 ? value.toFixed(2) : value.toFixed(5);
-}
-
 function formatChange(pct) {
   if (pct == null || Number.isNaN(pct)) return "";
   return `${pct >= 0 ? "+" : ""}${pct.toFixed(2)} %`;
-}
-
-// Date locale à partir d'un horodatage serveur. Le serveur envoie désormais
-// un fuseau explicite ; on tolère une valeur sans fuseau (base écrite par une
-// version antérieure) en la lisant comme de l'UTC — jamais comme du local.
-function formatUtcDate(iso) {
-  if (!iso) return "";
-  const stamped = /[Zz]|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : `${iso}Z`;
-  return new Date(stamped).toLocaleDateString();
 }
 
 // --- Graphique (TradingView Lightweight Charts) ----------------------------
@@ -115,6 +110,38 @@ function updateLegend(candle) {
     `(${pct >= 0 ? "+" : ""}${pct.toFixed(2)} %)</span>`;
 }
 
+/**
+ * Marqueurs des trades RÉELLEMENT exécutés sur la paire affichée.
+ *
+ * Source = journal SQL (`/api/positions`), jamais une simulation : tant
+ * qu'aucun broker n'a exécuté, il n'y a aucun marqueur. Chaque ligne du
+ * journal est un fill (entrée OU sortie) : on pose une flèche à son
+ * horodatage, verte à l'achat, rouge à la vente.
+ */
+function applyTradeMarkers() {
+  if (!state.series || !state.activeSymbol) return;
+  const markers = state.trades
+    .filter(trade => trade.symbol === state.activeSymbol && trade.executed_at)
+    .map(trade => {
+      const moment = new Date(
+        /[Zz]|[+-]\d{2}:?\d{2}$/.test(trade.executed_at)
+          ? trade.executed_at
+          : `${trade.executed_at}Z`);
+      const buy = trade.side === "BUY";
+      return {
+        time: Math.floor(moment.getTime() / 1000),
+        position: buy ? "belowBar" : "aboveBar",
+        color: buy ? UP_COLOR : DOWN_COLOR,
+        shape: buy ? "arrowUp" : "arrowDown",
+        text: `${trade.side} ${trade.quantity}` +
+          (trade.fill_price == null ? "" : ` @ ${formatPrice(trade.fill_price)}`),
+      };
+    })
+    .filter(marker => Number.isFinite(marker.time))
+    .sort((a, b) => a.time - b.time); // Lightweight Charts exige l'ordre croissant
+  state.series.setMarkers(markers);
+}
+
 async function loadInitialCandles() {
   const response = await fetch(`/api/charts/price-history?symbol=${state.activeSymbol}&points=180`);
   if (!response.ok) return;
@@ -124,6 +151,7 @@ async function loadInitialCandles() {
   state.hasMore = data.has_more;
   state.series.setData(state.candles);
   state.chart.timeScale().scrollToRealTime();
+  applyTradeMarkers();
   document.getElementById("chart-loading").classList.add("hidden");
   updateLegend(state.candles[state.candles.length - 1]);
   setChartHeader();
@@ -144,6 +172,7 @@ async function loadOlderCandles() {
     // setData avec les données préfixées : Lightweight Charts conserve la
     // plage visible — le défilement de l'utilisateur n'est pas perturbé.
     state.series.setData(state.candles);
+    applyTradeMarkers(); // setData efface les marqueurs : on les repose
   } finally {
     state.loadingOlder = false;
   }
@@ -176,6 +205,15 @@ function setChartHeader() {
   document.getElementById("chart-title").textContent = `${state.activeSymbol} — M1`;
   document.getElementById("chart-updated").textContent =
     `maj ${new Date().toLocaleTimeString()} (toutes les ${state.refreshSeconds}s)`;
+  // Variation 24 h de la paire affichée (même source que la watchlist).
+  const quote = state.symbols.find(item => item.symbol === state.activeSymbol);
+  const change = document.getElementById("chart-change");
+  if (quote && quote.change_pct != null) {
+    change.textContent = `${formatPrice(quote.last)}  ${formatChange(quote.change_pct)}`;
+    change.className = `font-mono text-xs ${pnlClass(quote.change_pct)}`;
+  } else {
+    change.textContent = "";
+  }
 }
 
 function scheduleRefresh() {
@@ -188,6 +226,7 @@ function scheduleRefresh() {
 
 function setActiveSymbol(symbol) {
   state.activeSymbol = symbol;
+  prefs.set("live:symbol", symbol); // retrouvé au prochain chargement de page
   state.candles = [];
   state.hasMore = true;
   state.hovering = false;
@@ -199,6 +238,7 @@ function setActiveSymbol(symbol) {
   createChart();          // nouveau graphique vierge pour l'onglet
   loadInitialCandles();
   refreshTradingButton(); // vérifie si le trading est déjà en cours sur la paire
+  renderPositions();      // le filtre « symbole affiché » suit l'onglet
 }
 
 // --- Bouton Trading/Stopped ------------------------------------------------
@@ -221,7 +261,9 @@ function renderTradingButton(enabled) {
     button.className = base + (enabled
       ? "bg-emerald-600 text-white hover:bg-emerald-500"
       : "bg-red-600 text-white hover:bg-red-500");
-    button.title = "";
+    button.title = enabled
+      ? "Cliquer pour arrêter le trading sur cette paire."
+      : "Cliquer pour armer le trading sur cette paire.";
   }
 }
 
@@ -266,18 +308,42 @@ async function toggleTrading() {
 async function loadSymbols() {
   const response = await fetch("/api/symbols");
   if (!response.ok) return;
-  const data = await response.json();
-  renderWatchlist(data.symbols);
+  state.symbols = (await response.json()).symbols;
+  renderWatchlist();
+  setChartHeader();
+}
+
+// Filtre (recherche + « armées seulement ») et tri appliqués côté client :
+// /api/symbols sert la liste complète, la mise en forme reste une affaire
+// d'interface.
+function visibleSymbols() {
+  const query = (document.getElementById("symbol-search").value || "").trim().toUpperCase();
+  const armedOnly = document.getElementById("symbol-armed-only").checked;
+  const sort = document.getElementById("symbol-sort").value;
+  let items = state.symbols.filter(item =>
+    (!query || item.symbol.includes(query)) && (!armedOnly || item.trading));
+  const byChange = (a, b) => (b.change_pct ?? 0) - (a.change_pct ?? 0);
+  if (sort === "change_desc") items = [...items].sort(byChange);
+  else if (sort === "change_asc") items = [...items].sort((a, b) => byChange(b, a));
+  else if (sort === "trading") {
+    items = [...items].sort((a, b) =>
+      Number(b.trading) - Number(a.trading) || a.symbol.localeCompare(b.symbol));
+  } else items = [...items].sort((a, b) => a.symbol.localeCompare(b.symbol));
+  return items;
 }
 
 // Watchlist « Market Watch » : symbole + pastille de trading + dernier prix
-// + variation 24 h colorée. La structure n'est bâtie qu'une fois ; les
-// rafraîchissements périodiques ne mettent à jour QUE prix/variation/pastille
-// (pas de innerHTML global → pas de flicker, l'onglet actif reste surligné).
-function renderWatchlist(items) {
+// + variation 24 h colorée. La structure n'est rebâtie que si l'ENSEMBLE
+// affiché change (filtre/tri) ; un simple rafraîchissement de prix ne met à
+// jour que prix/variation/pastille → pas de flicker, l'onglet actif reste
+// surligné.
+function renderWatchlist() {
   const list = document.getElementById("symbol-list");
-  if (list.children.length !== items.length) {
-    list.innerHTML = "";
+  const items = visibleSymbols();
+  const signature = items.map(item => item.symbol).join(",");
+  if (list.dataset.signature !== signature) {
+    list.dataset.signature = signature;
+    list.replaceChildren();
     for (const item of items) {
       const li = document.createElement("li");
       li.dataset.symbol = item.symbol;
@@ -305,18 +371,38 @@ function renderWatchlist(items) {
     li.querySelector("[data-last]").textContent = formatPrice(item.last);
     const change = li.querySelector("[data-change]");
     change.textContent = formatChange(item.change_pct);
-    change.className = `text-[10px] ${item.change_pct >= 0 ? "text-emerald-400" : "text-red-400"}`;
+    change.className = `text-[10px] ${pnlClass(item.change_pct)}`;
   }
-  if (!state.activeSymbol && items.length) {
-    setActiveSymbol(items[0].symbol);
+  const armed = state.symbols.filter(item => item.trading).length;
+  document.getElementById("symbol-count").textContent =
+    `${items.length}/${state.symbols.length} · ${armed} armée(s)`;
+  // Aucun symbole actif encore choisi : on reprend celui de la session
+  // précédente s'il existe toujours, sinon le premier de la liste.
+  if (!state.activeSymbol && state.symbols.length) {
+    const remembered = prefs.get("live:symbol");
+    const known = state.symbols.some(item => item.symbol === remembered);
+    setActiveSymbol(known ? remembered : state.symbols[0].symbol);
   }
+}
+
+function initWatchlistControls() {
+  const search = document.getElementById("symbol-search");
+  const sort = document.getElementById("symbol-sort");
+  const armed = document.getElementById("symbol-armed-only");
+  sort.value = prefs.get("live:sort", "symbol");
+  armed.checked = Boolean(prefs.get("live:armedOnly", false));
+  search.addEventListener("input", renderWatchlist);
+  sort.addEventListener("change", () => {
+    prefs.set("live:sort", sort.value);
+    renderWatchlist();
+  });
+  armed.addEventListener("change", () => {
+    prefs.set("live:armedOnly", armed.checked);
+    renderWatchlist();
+  });
 }
 
 // --- Positions & P&L -------------------------------------------------------
-
-function pnlClass(value) {
-  return value >= 0 ? "text-emerald-400" : "text-red-400";
-}
 
 function sideBadge(side, dimmed) {
   // BUY vert / SELL rouge (convention des terminaux) ; grisé si fermée.
@@ -326,16 +412,18 @@ function sideBadge(side, dimmed) {
   return `<span class="font-semibold ${color}">${side}</span>`;
 }
 
+// `data-v` = valeur brute pour le tri et l'export CSV (le texte affiché est
+// formaté, coloré, parfois vide — il ne se trie pas correctement).
 function openPositionRow(p) {
   const pnl = p.pnl == null ? "—" : `${p.pnl >= 0 ? "+" : ""}${p.pnl}`;
   return `
     <tr class="border-t border-slate-700/60">
       <td class="py-1 pr-2 font-mono">${p.symbol}</td>
-      <td class="pr-2">${sideBadge(p.side, false)}</td>
-      <td class="pr-2">${p.quantity}</td>
-      <td class="pr-2">${formatPrice(p.entry_price)}</td>
-      <td class="pr-2">${p.current_price == null ? "—" : formatPrice(p.current_price)}</td>
-      <td class="pr-2 ${p.pnl == null ? "" : pnlClass(p.pnl)}">${pnl}</td>
+      <td class="pr-2" data-v="${p.side}">${sideBadge(p.side, false)}</td>
+      <td class="pr-2" data-v="${p.quantity}">${p.quantity}</td>
+      <td class="pr-2" data-v="${p.entry_price ?? ""}">${formatPrice(p.entry_price)}</td>
+      <td class="pr-2" data-v="${p.current_price ?? ""}">${p.current_price == null ? "—" : formatPrice(p.current_price)}</td>
+      <td class="pr-2 ${p.pnl == null ? "" : pnlClass(p.pnl)}" data-v="${p.pnl ?? ""}">${pnl}</td>
       <td>ouverte</td>
     </tr>`;
 }
@@ -349,22 +437,22 @@ function tradeRow(t) {
   return `
     <tr class="border-t border-slate-700/60 text-slate-500">
       <td class="py-1 pr-2 font-mono">${t.symbol}</td>
-      <td class="pr-2">${sideBadge(t.side, true)}</td>
-      <td class="pr-2">${t.quantity}</td>
-      <td class="pr-2">${t.fill_price == null ? "—" : formatPrice(t.fill_price)}</td>
+      <td class="pr-2" data-v="${t.side}">${sideBadge(t.side, true)}</td>
+      <td class="pr-2" data-v="${t.quantity}">${t.quantity}</td>
+      <td class="pr-2" data-v="${t.fill_price ?? ""}">${t.fill_price == null ? "—" : formatPrice(t.fill_price)}</td>
       <td class="pr-2">—</td>
-      <td class="pr-2">${pnl}</td>
-      <td>${t.status.toLowerCase()} ${formatUtcDate(t.executed_at)}</td>
+      <td class="pr-2" data-v="${t.pnl ?? ""}">${pnl}</td>
+      <td title="${formatUtcDateTime(t.executed_at)}">${t.status.toLowerCase()} ${formatUtcDate(t.executed_at)}</td>
     </tr>`;
 }
 
 // État du compte chez le broker (équité, solde, marge) + perte du jour face à
 // la limite configurée. Déconnecté → tirets : on n'invente aucun chiffre.
 const ACCOUNT_ROWS = [
-  ["equity", "Équité"],
-  ["balance", "Solde"],
-  ["margin", "Marge"],
-  ["margin_free", "Marge libre"],
+  ["equity", "Équité", "Valeur liquidative du compte, rapportée par le broker."],
+  ["balance", "Solde", "Solde espèces hors positions ouvertes."],
+  ["margin", "Marge", "Marge immobilisée par les positions ouvertes."],
+  ["margin_free", "Marge libre", "Marge encore disponible pour de nouvelles entrées."],
 ];
 
 function renderAccount(data) {
@@ -373,9 +461,10 @@ function renderAccount(data) {
   const summary = (data && data.summary) || {};
   const connected = Boolean(data && data.connected);
   box.replaceChildren();
-  for (const [key, label] of ACCOUNT_ROWS) {
+  for (const [key, label, hint] of ACCOUNT_ROWS) {
     const row = document.createElement("div");
     row.className = "flex justify-between gap-2";
+    row.title = hint;
     const dt = document.createElement("dt");
     dt.className = "text-slate-500";
     dt.textContent = label;
@@ -387,24 +476,25 @@ function renderAccount(data) {
     box.append(row);
   }
   // Perte du jour : ambre dès la moitié du plafond, rouge une fois atteint
-  // (au-delà, le RiskManager refuse toute nouvelle entrée).
+  // (au-delà, le RiskManager refuse toute nouvelle entrée). Une barre de
+  // progression rend la marge restante lisible d'un coup d'œil.
   if (connected && data.day_loss_pct != null && data.max_daily_loss_pct > 0) {
     const loss = data.day_loss_pct;
     const max = data.max_daily_loss_pct;
-    const row = document.createElement("div");
-    row.className = "mt-1 flex justify-between gap-2 border-t border-slate-700/60 pt-1";
-    const dt = document.createElement("dt");
-    dt.className = "text-slate-500";
-    dt.textContent = "Perte du jour";
-    const dd = document.createElement("dd");
     const tone = loss >= max ? "text-red-400" : loss >= max / 2 ? "text-amber-400" : "text-slate-300";
-    dd.className = `font-mono ${tone}`;
-    dd.textContent = `${loss.toFixed(2)} / ${max} %`;
-    dd.title = loss >= max
+    const barColor = loss >= max ? "bg-red-500" : loss >= max / 2 ? "bg-amber-500" : "bg-emerald-500";
+    const wrap = document.createElement("div");
+    wrap.className = "mt-1 border-t border-slate-700/60 pt-1";
+    wrap.title = loss >= max
       ? "Limite atteinte : plus aucune entrée aujourd'hui (les sorties restent autorisées)."
       : "Perte du jour rapportée à l'équité de début de journée UTC.";
-    row.append(dt, dd);
-    box.append(row);
+    wrap.innerHTML =
+      `<div class="flex justify-between gap-2">` +
+      `<dt class="text-slate-500">Perte du jour</dt>` +
+      `<dd class="font-mono ${tone}">${loss.toFixed(2)} / ${max} %</dd></div>` +
+      `<div class="mt-1 h-1 w-full overflow-hidden rounded bg-slate-700">` +
+      `<div class="h-full ${barColor}" style="width:${Math.min(100, (loss / max) * 100).toFixed(1)}%"></div></div>`;
+    box.append(wrap);
   }
 }
 
@@ -420,22 +510,39 @@ async function refreshAccount() {
 async function refreshPositions() {
   const response = await fetch("/api/positions");
   if (!response.ok) return;
-  const data = await response.json();
+  state.positions = await response.json();
+  state.trades = state.positions.trades;
+  applyTradeMarkers(); // le journal a pu s'enrichir depuis le dernier fetch
+  renderPositions();
+}
+
+// Rendu (re)joué aussi au changement d'onglet ou de filtre, sans refetch.
+function renderPositions() {
+  const data = state.positions;
+  if (!data) return;
+  const activeOnly = document.getElementById("positions-active-only").checked;
+  const keep = row => !activeOnly || row.symbol === state.activeSymbol;
+  const open = data.open.filter(keep);
+  const trades = data.trades.filter(keep);
   const body = document.getElementById("positions-body");
   const empty = document.getElementById("positions-empty");
-  const rows = data.open.map(openPositionRow).join("") + data.trades.map(tradeRow).join("");
-  body.innerHTML = rows;
+  body.innerHTML = open.map(openPositionRow).join("") + trades.map(tradeRow).join("");
   // État vide HONNÊTE : rien n'est inventé quand le broker est déconnecté.
-  const isEmpty = !data.open.length && !data.trades.length;
+  const isEmpty = !open.length && !trades.length;
   empty.classList.toggle("hidden", !isEmpty);
   if (isEmpty) {
-    empty.textContent = data.broker_connected
-      ? "Aucune position ouverte ni trade exécuté."
-      : "Broker déconnecté — aucune position réelle à afficher.";
+    empty.textContent = !data.broker_connected
+      ? "Broker déconnecté — aucune position réelle à afficher."
+      : activeOnly
+        ? `Aucune position ni trade sur ${state.activeSymbol}.`
+        : "Aucune position ouverte ni trade exécuté.";
   }
+  document.getElementById("positions-count").textContent =
+    `${data.open.length}/${data.trades.length}`;
+
   const total = document.getElementById("total-pnl");
   total.textContent = `${data.total_pnl >= 0 ? "+" : ""}${data.total_pnl}`;
-  total.className = `mt-1 text-2xl font-semibold ${pnlClass(data.total_pnl)}`;
+  total.className = `mt-1 text-center text-2xl font-semibold ${pnlClass(data.total_pnl)}`;
   // Détail des deux composantes réelles du P&L : latent (positions ouvertes
   // chez le broker) et réalisé (trades journalisés, P&L calculé par le broker).
   document.getElementById("pnl-detail").innerHTML =
@@ -446,66 +553,132 @@ async function refreshPositions() {
 
 // --- Onglets du panneau bas ------------------------------------------------
 
+function showBottomTab(name) {
+  document.querySelectorAll(".bottom-tab").forEach(button => {
+    const active = button.dataset.tab === name;
+    button.classList.toggle("bg-slate-700", active);
+    button.classList.toggle("text-slate-400", !active);
+  });
+  document.getElementById("tab-positions").classList.toggle("hidden", name !== "positions");
+  document.getElementById("tab-logs").classList.toggle("hidden", name !== "logs");
+  // Chaque onglet a sa propre barre d'outils (filtre, export…).
+  const tools = document.getElementById("positions-tools");
+  tools.classList.toggle("hidden", name !== "positions");
+  tools.classList.toggle("flex", name === "positions");
+  const logTools = document.getElementById("logs-tools");
+  logTools.classList.toggle("hidden", name !== "logs");
+  logTools.classList.toggle("flex", name === "logs");
+  prefs.set("live:bottomTab", name);
+}
+
 function initBottomTabs() {
   document.querySelectorAll(".bottom-tab").forEach(button => {
-    button.addEventListener("click", () => {
-      document.querySelectorAll(".bottom-tab").forEach(b => {
-        const active = b === button;
-        b.classList.toggle("bg-slate-700", active);
-        b.classList.toggle("text-slate-400", !active);
-      });
-      document.getElementById("tab-positions").classList.toggle("hidden", button.dataset.tab !== "positions");
-      document.getElementById("tab-logs").classList.toggle("hidden", button.dataset.tab !== "logs");
-    });
+    button.addEventListener("click", () => showBottomTab(button.dataset.tab));
   });
+  showBottomTab(prefs.get("live:bottomTab", "positions"));
+}
+
+// Panneau bas redimensionnable à la souris, hauteur mémorisée. Bornes : assez
+// haut pour lire deux lignes, jamais au point d'écraser le graphique.
+function initPanelResizer() {
+  const panel = document.getElementById("bottom-panel");
+  const handle = document.getElementById("panel-resizer");
+  const stored = prefs.get("live:panelHeight");
+  if (stored) panel.style.height = `${stored}px`;
+  let dragging = false;
+  const onMove = (event) => {
+    if (!dragging) return;
+    const height = Math.round(
+      Math.min(window.innerHeight * 0.7, Math.max(80, window.innerHeight - event.clientY)));
+    panel.style.height = `${height}px`;
+  };
+  const onUp = () => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.classList.remove("select-none");
+    prefs.set("live:panelHeight", panel.getBoundingClientRect().height);
+  };
+  handle.addEventListener("mousedown", (event) => {
+    dragging = true;
+    event.preventDefault();
+    document.body.classList.add("select-none"); // pas de sélection de texte en glissant
+  });
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
+}
+
+// --- Logs ------------------------------------------------------------------
+// Format serveur : « date | NIVEAU | module | message » (core_logging).
+// On colore le niveau et on estompe l'entête pour que le message ressorte ;
+// sans ça, repérer une erreur dans 100 lignes grises était impossible.
+
+const LEVEL_STYLES = {
+  ERROR: "text-red-400",
+  CRITICAL: "text-red-400 font-semibold",
+  WARNING: "text-amber-400",
+  INFO: "text-sky-400",
+  DEBUG: "text-slate-500",
+};
+
+function escapeHtml(text) {
+  return text.replace(/[&<>]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[ch]));
+}
+
+function renderLogs() {
+  const container = document.getElementById("log-lines");
+  const query = (document.getElementById("logs-filter").value || "").trim().toLowerCase();
+  const lines = query
+    ? state.logLines.filter(line => line.toLowerCase().includes(query))
+    : state.logLines;
+  container.innerHTML = lines.map(line => {
+    const parts = line.split(" | ");
+    if (parts.length < 4) return `<div>${escapeHtml(line)}</div>`;
+    const [stamp, level, module, ...rest] = parts;
+    const style = LEVEL_STYLES[level.trim()] || "text-slate-400";
+    return `<div class="whitespace-pre-wrap">` +
+      `<span class="text-slate-600">${escapeHtml(stamp.slice(11, 19))}</span> ` +
+      `<span class="${style}">${escapeHtml(level.trim().padEnd(7))}</span> ` +
+      `<span class="text-slate-600">${escapeHtml(module.split(".").pop())}</span> ` +
+      `<span class="text-slate-300">${escapeHtml(rest.join(" | "))}</span></div>`;
+  }).join("");
+  document.getElementById("logs-count").textContent =
+    query ? `${lines.length}/${state.logLines.length}` : `${state.logLines.length}`;
+  // Suivi automatique : on ne force le défilement que si l'utilisateur le
+  // demande — sinon relire une vieille ligne devenait impossible.
+  if (document.getElementById("logs-autoscroll").checked) {
+    const pane = document.getElementById("tab-logs");
+    pane.scrollTop = pane.scrollHeight;
+  }
 }
 
 async function refreshLogs() {
-  const response = await fetch("/api/logs?count=100");
+  const response = await fetch("/api/logs?count=200");
   if (!response.ok) return;
-  const data = await response.json();
-  document.getElementById("log-lines").textContent = data.lines.join("\n");
+  state.logLines = (await response.json()).lines;
+  renderLogs();
 }
 
 // --- Statut & WebSocket ----------------------------------------------------
 
 async function loadStatus() {
-  const response = await fetch("/api/status");
-  const status = await response.json();
+  // Le bandeau (mode / broker / stratégie / DÉMO) est peint par ui.js —
+  // identique sur les trois pages ; ici le badge broker ouvre la fenêtre.
+  const status = await loadHeaderStatus(openBrokerModal);
+  if (!status) return;
   // Le serveur garantit ≥ 1 (validation config), ceinture côté client :
   // un intervalle 0 martèlerait l'API en boucle.
   state.refreshSeconds = Math.max(1, status.chart_refresh_seconds || 5);
   state.tradingMode = status.trading_mode;
   const wasConnected = state.brokerConnected;
   state.brokerConnected = status.broker_connected;
-  // Statut en badges colorés (façon barre d'état d'un terminal de trading) :
-  // mode (LIVE en ambre = prudence), connexion broker (pastille), stratégie.
-  const live = status.trading_mode === "live";
-  const modePill = live ? "bg-amber-600 text-white" : "bg-sky-700 text-sky-100";
-  const brokerDot = status.broker_connected ? "bg-emerald-400" : "bg-red-500";
-  const strategyColor = status.strategy_enabled ? "text-emerald-400" : "text-slate-500";
-  // Badge DÉMO franc quand les données de marché ne sont pas réelles : le
-  // graphique et les prix de la watchlist sont simulés — pas de tromperie.
-  const demoBadge = status.market_data_live
-    ? ""
-    : `<span class="rounded bg-purple-700 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-purple-100"` +
-      ` title="Données de marché simulées (aucun flux broker connecté)">démo</span>`;
-  // Le badge broker est CLIQUABLE : il ouvre la fenêtre de connexion broker.
-  document.getElementById("header-status").innerHTML =
-    `<span class="inline-flex items-center gap-2">` +
-    `<span class="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${modePill}">${status.trading_mode}</span>` +
-    `<button id="broker-badge" type="button" title="Connexion au broker"` +
-    ` class="inline-flex items-center gap-1 rounded px-1 hover:bg-slate-700">` +
-    `<span class="h-1.5 w-1.5 rounded-full ${brokerDot}"></span>${status.broker}` +
-    `<span class="text-[10px] ${status.broker_connected ? "text-emerald-400" : "text-red-400"}">` +
-    `${status.broker_connected ? "connecté" : "déconnecté"}</span></button>` +
-    `<span class="text-slate-500">·</span>` +
-    `<span class="${strategyColor}">${status.strategy}</span>` +
-    demoBadge +
-    `</span>`;
-  document.getElementById("broker-badge").addEventListener("click", openBrokerModal);
-  // Un changement d'état de connexion réactualise le bouton trade actif.
-  if (wasConnected !== state.brokerConnected && state.activeSymbol) refreshTradingButton();
+  // Un changement d'état de connexion réactualise le bouton trade actif et
+  // prévient l'utilisateur (une chute de connexion est silencieuse sinon).
+  if (wasConnected !== state.brokerConnected) {
+    if (state.activeSymbol) refreshTradingButton();
+    if (!state.brokerConnected && wasConnected) {
+      showToast("Broker déconnecté : plus aucun ordre ne partira.", "error");
+    }
+  }
 }
 
 // --- Connexion broker (fenêtre modale) -------------------------------------
@@ -605,6 +778,9 @@ async function connectBroker() {
   setBrokerError("");
   const broker = selectedBroker();
   if (!broker) return;
+  const button = document.getElementById("broker-connect");
+  button.disabled = true;
+  button.textContent = "Connexion…";
   showToast("Connexion au broker…", "info");
   let response;
   try {
@@ -615,8 +791,12 @@ async function connectBroker() {
     });
   } catch (err) {
     showToast("Réseau indisponible.", "error");
+    button.disabled = false;
+    button.textContent = "Se connecter";
     return;
   }
+  button.disabled = false;
+  button.textContent = "Se connecter";
   if (response.ok) {
     showToast(`${broker.label} connecté.`, "success");
     markBrokerConnected(broker.name, true);
@@ -659,8 +839,19 @@ function initWebSocket() {
 
 document.addEventListener("DOMContentLoaded", async () => {
   initBottomTabs();
+  initPanelResizer();
+  initWatchlistControls();
   initWebSocket();
+  makeSortable(document.getElementById("positions-table"));
   document.getElementById("trading-toggle").addEventListener("click", toggleTrading);
+  document.getElementById("chart-fit").addEventListener("click", () => {
+    if (state.chart) state.chart.timeScale().scrollToRealTime();
+  });
+  document.getElementById("positions-active-only").addEventListener("change", renderPositions);
+  document.getElementById("positions-export").addEventListener("click", () =>
+    exportTableCsv(document.getElementById("positions-table"),
+      `pyea_positions_${new Date().toISOString().slice(0, 10)}.csv`));
+  document.getElementById("logs-filter").addEventListener("input", renderLogs);
   // Fenêtre de connexion broker (boutons statiques câblés une fois).
   document.getElementById("broker-select").addEventListener("change", renderBrokerDetails);
   document.getElementById("broker-connect").addEventListener("click", connectBroker);
@@ -670,6 +861,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("broker-modal").addEventListener("click", (event) => {
     if (event.target.id === "broker-modal") closeBrokerModal(); // clic sur le fond
   });
+  registerOverlay(document.getElementById("broker-modal"), closeBrokerModal); // Échap
   await loadStatus();
   await loadSymbols();      // déclenche le premier rendu du graphique
   await refreshPositions();
@@ -678,6 +870,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   scheduleRefresh();
   setInterval(refreshPositions, state.refreshSeconds * 1000);
   setInterval(refreshAccount, state.refreshSeconds * 1000);
+  setInterval(loadStatus, 10000);  // connexion broker perdue → header à jour
   setInterval(refreshLogs, 15000);
   // Prix de la watchlist rafraîchis à part (cadence lente : recalcul de
   // tous les symboles), en place — l'onglet actif n'est jamais perturbé.
