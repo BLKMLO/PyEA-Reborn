@@ -1,8 +1,18 @@
 """Configuration centralisée du projet.
 
 Deux sources, un seul objet ``Settings`` :
-- ``.env``       : secrets et paramètres machine (identifiants IB, ports paper/live).
+- ``.env``       : secrets et paramètres machine (ports IB paper/live, chemin MT5).
 - ``config.yaml``: paramètres fonctionnels versionnables (stratégie, risque, storage).
+
+**Priorité : config.yaml l'emporte sur .env.** Les valeurs du YAML sont
+passées au constructeur de ``Settings``, et pydantic-settings donne aux
+arguments d'initialisation la priorité la PLUS HAUTE (devant les variables
+d'environnement et le ``.env``). Conséquence concrète : une clé présente dans
+config.yaml ignore la variable d'environnement de même nom — mettre
+``TRADING_MODE=live`` dans ``.env`` ne change rien si ``broker.trading_mode``
+est renseigné dans le YAML. C'est voulu (le YAML est la source versionnée du
+fonctionnel), mais il faut le savoir : pour qu'une variable d'environnement
+prenne effet, la clé correspondante doit être ABSENTE de config.yaml.
 
 Le reste du code ne lit JAMAIS os.environ ni le YAML directement :
 tout passe par ``get_settings()``.
@@ -36,7 +46,6 @@ class Settings(BaseSettings):
     ib_port_paper: int = 7497
     ib_port_live: int = 7496
     ib_client_id: int = 1
-    ib_account_id: str = ""
 
     # MetaTrader 5 : PyEA s'ATTACHE à un terminal MT5 déjà lancé et connecté
     # (comme TWS/IB Gateway pour IB) — aucun identifiant saisi dans PyEA. Le
@@ -137,5 +146,7 @@ def _yaml_overrides(raw: dict[str, Any]) -> dict[str, Any]:
 
 @lru_cache
 def get_settings() -> Settings:
-    """Instance unique : YAML d'abord, .env (et variables d'env) en surcharge."""
+    """Instance unique. ATTENTION à la priorité : le YAML est passé en
+    arguments d'initialisation, qui PRIMENT sur .env et les variables
+    d'environnement (cf. l'en-tête du module)."""
     return Settings(**_yaml_overrides(_load_yaml(CONFIG_YAML_PATH)))

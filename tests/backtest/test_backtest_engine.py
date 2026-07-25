@@ -8,6 +8,7 @@ attendues sont donc les mêmes qu'avec l'ancien moteur maison.
 
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from pyea.backtest import BacktestEngine
@@ -235,3 +236,37 @@ def test_cloture_forcee_fin_de_semaine() -> None:
     assert trade.exit_time == index[1]  # vendredi, pas lundi
     assert trade.exit_price == 1.2
     assert trade.pnl == round(0.2 * size, 5)
+
+
+def test_contexte_de_chauffe_nest_jamais_rejoue() -> None:
+    """Le contexte chauffe la stratégie mais ne produit NI trade NI statistique.
+
+    Sans lui, les premières bougies de chaque bloc out-of-sample donnaient des
+    features NaN (zéro trade possible) ; avec lui, elles doivent être évaluées
+    — mais les bougies de contexte elles-mêmes restent hors du backtest.
+    """
+    index = pd.date_range("2024-01-01", periods=30, freq="1h", tz="UTC")
+    frame = pd.DataFrame({"bid_close": np.linspace(1.0, 1.3, 30)}, index=index)
+    contexte = pd.DataFrame(
+        {"bid_close": np.linspace(0.7, 1.0, 40)},
+        index=pd.date_range("2023-12-29", periods=40, freq="1h", tz="UTC"),
+    )
+    vues: list[pd.DataFrame] = []
+
+    class _Espion(ScriptedStrategy):
+        async def warmup(self, params: dict[str, Any]) -> None:
+            vues.append(params["frame"])
+
+    # Entrée à la bougie 2 du bloc évalué, sortie à la 10.
+    engine = BacktestEngine(
+        _Espion({2: SignalAction.ENTER_LONG, 10: SignalAction.EXIT}),
+        RiskManager(get_settings()),
+    )
+    result = engine.run("EURUSD", frame, "H1", context=contexte)
+
+    # La chauffe voit contexte + bloc évalué...
+    assert len(vues[0]) == 70
+    # ...mais le backtest ne compte que le bloc évalué.
+    assert result.bars == 30
+    assert all(t.entry_time >= index[0] for t in result.trades)
+    assert all(ts >= index[0] for ts, _ in result.equity_curve)

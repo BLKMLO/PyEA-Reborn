@@ -31,6 +31,11 @@ def init_db() -> None:
     _session_factory = sessionmaker(bind=_engine, future=True)
     Base.metadata.create_all(_engine)
     _add_missing_columns(_engine)
+    # On change de base : tout cache mémoire adossé à l'ancienne est périmé.
+    # (Import local : storage_trading_state dépend de ce module.)
+    from pyea.storage.storage_trading_state import invalidate_cache
+
+    invalidate_cache()
 
 
 def _add_missing_columns(engine: Engine) -> None:

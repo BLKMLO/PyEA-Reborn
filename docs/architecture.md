@@ -78,11 +78,14 @@ PyEA-Reborn/
 │   │   ├── storage_trades.py              # Journal SQL des trades exécutés (affichage réel, jamais simulé).
 │   │   ├── storage_daily_equity.py        # Équité de référence du jour (limite de perte journalière),
 │   │   │                                  # persistée : un redémarrage ne remet pas le compteur à zéro.
+│   │   ├── storage_trading_state.py       # Interrupteur Trading/Stopped par paire (cache mémoire :
+│   │   │                                  # lu à chaque tick, la base reste la source de vérité).
 │   │   └── storage_training_runs.py       # Historique des entraînements (métriques OOS, artefacts).
 │   │
 │   ├── api/
 │   │   ├── api_pages.py                   # Pages HTML : / (live), /backtest, /training (Jinja2 + HTMX).
-│   │   ├── api_rest.py                    # REST : status, brokers (liste + connect/disconnect), symbols, trading, positions, logs, charts.
+│   │   ├── api_rest.py                    # REST : status, brokers (liste + connect/disconnect), symbols,
+│   │   │                                  # trading, account (équité/marge du broker), positions, logs, charts.
 │   │   ├── api_backtest.py                # REST : /api/backtest/datasets et /api/backtest/run.
 │   │   ├── api_training.py                # REST : /api/training/run, current-job, jobs/{id}, runs, definition/{strategy}.
 │   │   └── api_websocket.py               # WebSocket /ws : relais du bus vers les navigateurs.
@@ -119,8 +122,10 @@ PyEA-Reborn/
    (`set_execution_callback`), ce qui libère l'ordre en vol et inscrit le
    trade au journal. Un broker qui ne sait pas rapporter ses exécutions
    n'alimente aucun trade — PyEA n'en invente jamais.
-2. **Le bus d'événements découple tout** : broker, stratégie et logs
-   publient ; le WebSocket et la persistance consomment. FastAPI ne
+2. **Le bus d'événements découple tout** : broker et stratégie publient ; le
+   WebSocket et la persistance consomment. On ne déclare et ne relaie que des
+   topics ayant un producteur RÉEL — un topic relayé sans producteur donne
+   l'illusion d'un flux temps réel inexistant. FastAPI ne
    s'infiltre jamais dans la logique de trading. Les abonnés sont **isolés
    les uns des autres** : une erreur d'abonné est journalisée, jamais
    propagée au producteur (sinon une exception de stratégie tuerait la

@@ -1,18 +1,18 @@
 """Identifiants broker saisis au runtime, conservés EN MÉMOIRE uniquement.
 
-Contexte : les paramètres machine du broker (host, ports paper/live,
-client_id) vivent dans ``.env`` / ``config.yaml``. Mais l'utilisateur veut
-pouvoir saisir ses **identifiants de connexion** (nom d'utilisateur + mot de
-passe) depuis le dashboard, sans les écrire dans un fichier.
+⚠ **AUCUN APPELANT AUJOURD'HUI** — module conservé en réserve, pas mort par
+accident. Les deux brokers supportés ne s'authentifient PAS par login/mot de
+passe : Interactive Brokers délègue à TWS / IB Gateway (déjà logué) et
+MetaTrader 5 à un terminal MT5 déjà connecté. PyEA ne fait que s'attacher.
+Une version antérieure prévoyait que ``InteractiveBrokersGateway.connect()``
+lise ``password`` ici : cette décision a été ANNULÉE le 2026-07-20, et les
+endpoints d'identifiants ont été retirés de l'API en conséquence.
 
-Décision de sécurité : ces identifiants ne sont **jamais persistés** (ni
-SQLite, ni disque, ni log) — ils vivent dans ce singleton de module et
-disparaissent à l'arrêt du serveur. C'est exactement le comportement
-demandé (« jusqu'à ce que le serveur soit éteint »).
-
-Singleton de module (même statut que ``event_bus`` / ``web_log_buffer``) :
-l'API le lit/écrit, et le futur câblage réel de ``InteractiveBrokersGateway``
-lira ``broker_credentials.password`` au moment du ``connect()``.
+Ce module n'a donc de sens que si un futur broker exige de vrais
+identifiants. Sa règle tiendra toujours : ces identifiants ne sont **jamais
+persistés** (ni SQLite, ni disque, ni log) — ils vivent dans ce singleton de
+module et disparaissent à l'arrêt du serveur, et le mot de passe ne doit
+jamais transiter par l'API en lecture.
 """
 
 from __future__ import annotations

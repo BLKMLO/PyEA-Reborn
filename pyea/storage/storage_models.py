@@ -1,4 +1,4 @@
-"""Modèles SQLAlchemy : historique de signaux et journal des trades."""
+"""Modèles SQLAlchemy : état de trading, entraînements, équité et trades."""
 
 from __future__ import annotations
 
@@ -63,20 +63,6 @@ class TrainingRun(Base):
     oos_max_drawdown: Mapped[float | None] = mapped_column(Float, nullable=True)
     oos_profit_factor: Mapped[float | None] = mapped_column(Float, nullable=True)
     artifacts_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
-
-
-class SignalRecord(Base):
-    """Signal émis par une stratégie (accepté ou non par le risk management)."""
-
-    __tablename__ = "signals"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
-    strategy_name: Mapped[str] = mapped_column(String(64))
-    strategy_version: Mapped[str] = mapped_column(String(16))
-    symbol: Mapped[str] = mapped_column(String(32))
-    action: Mapped[str] = mapped_column(String(16))
-    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
 class TradeRecord(Base):

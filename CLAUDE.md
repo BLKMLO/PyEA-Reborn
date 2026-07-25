@@ -231,7 +231,12 @@ jamais commité — modèle dans `.env.example`).
   brutes ; trades gagnants / total) — jamais une moyenne de ratios par pli
   (une moyenne non pondérée donnerait le même poids à un pli de 2 trades qu'à
   un pli de 200) ; Sharpe/SQN restent affichés **par pli** (pas d'agrégat
-  statistiquement douteux entre plis).
+  statistiquement douteux entre plis). **Chauffe OOS récupérée** : chaque bloc
+  de test reçoit `OOS_CONTEXT_BARS` (300) bougies de contexte prises à la fin
+  de son bloc d'entraînement — elles chauffent features et indicateurs
+  récursifs mais ne sont JAMAIS rejouées (aucune décision, aucun trade, aucune
+  statistique). Sans elles, les ~60 premières bougies de chaque pli donnaient
+  des features NaN, donc zéro trade possible.
 - **Spécification de Couleuvre v0.1** fournie par l'utilisateur :
   `docs/strategie_couleuvre.md` (swing intra-semaine 2-5 j, triple
   barrier ATR, features prix/tendance/momentum/vol/calendrier, **un modèle
@@ -387,12 +392,16 @@ jamais commité — modèle dans `.env.example`).
   (IB + MT5) — cycle de vie, compte, ordres, flux de prix **et comptes rendus
   d'exécution** (la boucle live est refermée dans les deux sens, cf. journal
   du 2026-07-25).
-- **Non consommé pour l'instant** : `get_account_summary()` est implémenté par
-  les deux gateways et sert au RiskManager (perte journalière), mais l'équité /
-  la marge ne sont pas encore AFFICHÉES au dashboard (point relevé à l'audit,
-  pas encore traité). `SignalRecord` (table `signals`), `TOPIC_LOG` et
-  `TOPIC_EA_STATUS` restent du câblage mort ; `broker_credentials.py` est
-  conservé sans appelant (aucun broker supporté n'utilise de login/mdp).
+- **Compte affiché au dashboard** : `GET /api/account` sert le résumé réel du
+  broker (équité, solde, marge, marge libre) + la **perte du jour face au
+  plafond** `risk.max_daily_loss_pct` (ambre à la moitié, rouge une fois
+  atteinte). Déconnecté → tirets, jamais un chiffre inventé.
+- **Code mort supprimé (2026-07-25)** : `SignalRecord` (table `signals` jamais
+  écrite), les topics `TOPIC_LOG` / `TOPIC_EA_STATUS` (relayés au WebSocket
+  sans aucun producteur — un flux temps réel qui n'existait pas) et
+  `ib_account_id`. Seul `broker_credentials.py` reste **volontairement** sans
+  appelant (réserve pour un futur broker à identifiants ; son docstring le dit
+  désormais explicitement, il annonçait encore un câblage IB annulé).
 
 ## Points de vigilance (audit modularité 2026-07-18)
 
@@ -403,7 +412,9 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
 1. `event_bus` et `web_log_buffer` sont des singletons de module, pas
    injectés par `create_app()` (incohérent avec `MarketDataFeed` qui
    reçoit son bus). Si les tests exigent un jour des bus isolés, les
-   faire passer par `app_factory`.
+   faire passer par `app_factory`. **Atténué (2026-07-25)** : les relais
+   WebSocket sont désormais retirés du bus à l'arrêt de l'app
+   (`unwire_event_bus`), sinon chaque démarrage en empilait un jeu de plus.
 2. ~~`/api/status` code en dur `broker_connected: False`~~ **RÉSOLU
    (2026-07-20)** : gateway instanciée dans le `lifespan`, exposée par le
    singleton `broker_runtime` ; `/api/status` lit `is_connected()` réel.
@@ -417,6 +428,54 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
    sélection du modèle par actif) : le flux live est complet de bout en bout.
 
 ## Journal de décisions
+
+- **2026-07-25 (suite)** — **Passe d'audit, points 9 à 20** (le reste de la
+  liste). (9) **Chauffe OOS récupérée** : `BacktestEngine.run` accepte un
+  `context` (bougies ANTÉRIEURES, chauffées mais jamais rejouées) ; le
+  walk-forward lui passe la fin du bloc d'entraînement. Mesuré sur historique
+  synthétique : +32 trades OOS (615 → 647) à taux de gain **inchangé**
+  (0,7577 → 0,7604) — la signature d'une chauffe récupérée, pas d'une fuite
+  (le contexte est du passé que le modèle a déjà vu à l'entraînement).
+  (10) **Fuite d'abonnements au bus** : `wire_event_bus()` s'exécutait à chaque
+  `create_app()` sans jamais se désabonner — chaque démarrage empilait 5 relais
+  de plus sur le singleton, et le même tick partait N fois aux navigateurs
+  (visible en tests et sous `--reload`). Wire idempotent + `unwire_event_bus()`
+  à l'arrêt. (11) **`is_trading_enabled` faisait un SELECT SQLite par TICK**
+  (~124/s avec 31 paires en MT5, bloquant dans la boucle asyncio) : cache
+  mémoire invalidé à chaque écriture et à `init_db()`, la base restant la
+  source de vérité. (12) **Téléchargeur** : ~730 tâches sont lancées par année ;
+  si l'une échouait, les ~700 autres continuaient en arrière-plan (exception
+  jamais lue, sémaphore squatté, bande passante volée à l'année suivante) —
+  `try/finally` qui annule le reste. (13) **Compte affiché** : `GET /api/account`
+  (équité/solde/marge/marge libre + perte du jour face au plafond) et panneau
+  dédié en bas à droite du dashboard — les deux gateways le fournissaient
+  depuis longtemps sans que rien ne l'affiche. (14) **Reconnexion WebSocket** :
+  nouveau helper partagé `static/js/websocket.js` (backoff 1 s → 30 s,
+  indicateur vert/ambre/rouge) utilisé par le dashboard ET la page
+  Entraînement ; un redémarrage serveur ne laisse plus la page muette jusqu'au
+  F5. (16) **Priorité de config documentée** : le YAML est passé en arguments
+  d'initialisation et **PRIME** sur `.env` (pydantic-settings) — le docstring
+  affirmait l'inverse. Une variable d'environnement n'a d'effet que si la clé
+  est ABSENTE de config.yaml ; noté aussi dans `.env.example`. (17) **Code mort
+  supprimé** : `SignalRecord`, `TOPIC_LOG`/`TOPIC_EA_STATUS` (relayés sans
+  producteur), `ib_account_id` ; `broker_credentials.py` conservé mais son
+  docstring corrigé (il annonçait encore un câblage IB annulé le 2026-07-20).
+  (18) **`_demo_quote`** rejouait ~4 300 tirages par symbole, soit ~134 000 par
+  appel de `/api/symbols` toutes les 10 s : marche mémorisée (`_demo_closes`,
+  LRU par minute de fin) — 1 210 ms → 0,2 ms en cache, **valeurs strictement
+  identiques** (vérifié contre l'implémentation d'origine). (20)
+  **`requirements.txt`** : `MetaTrader5` décommenté avec son marqueur
+  `sys_platform == "win32"` (pip l'installe sous Windows, l'ignore ailleurs) —
+  ce n'était pas une contrainte Python 3.13 mais une contrainte d'OS.
+  backtrader reste volontairement HORS pip (vendorisé dans `lib/`), avec une
+  note explicite pour qu'on ne l'ajoute pas par erreur. **Conséquences
+  traitées** : `docs/architecture.md` (arbo storage, note sur les topics sans
+  producteur, `/api/account`), `.env.example`, `dashboard.html` (panneau
+  compte), `base.html` (chargement de `websocket.js`). **16 tests ajoutés,
+  168 verts** ; dashboard vérifié au navigateur (panneau compte en tirets
+  broker déconnecté, zéro erreur console). **Points 15 et 19 étaient déjà
+  traités** dans le lot précédent (horodatages UTC, attribut privé du
+  RiskManager).
 
 - **2026-07-25** — **Passe d'audit du code** (demande utilisateur : « détecter
   toutes les anomalies/améliorations possibles », puis correction dans l'ordre

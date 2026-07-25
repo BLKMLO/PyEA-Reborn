@@ -358,6 +358,65 @@ function tradeRow(t) {
     </tr>`;
 }
 
+// État du compte chez le broker (équité, solde, marge) + perte du jour face à
+// la limite configurée. Déconnecté → tirets : on n'invente aucun chiffre.
+const ACCOUNT_ROWS = [
+  ["equity", "Équité"],
+  ["balance", "Solde"],
+  ["margin", "Marge"],
+  ["margin_free", "Marge libre"],
+];
+
+function renderAccount(data) {
+  const box = document.getElementById("account-summary");
+  if (!box) return;
+  const summary = (data && data.summary) || {};
+  const connected = Boolean(data && data.connected);
+  box.replaceChildren();
+  for (const [key, label] of ACCOUNT_ROWS) {
+    const row = document.createElement("div");
+    row.className = "flex justify-between gap-2";
+    const dt = document.createElement("dt");
+    dt.className = "text-slate-500";
+    dt.textContent = label;
+    const dd = document.createElement("dd");
+    dd.className = "font-mono text-slate-300";
+    const value = summary[key];
+    dd.textContent = connected && value != null ? Number(value).toFixed(2) : "—";
+    row.append(dt, dd);
+    box.append(row);
+  }
+  // Perte du jour : ambre dès la moitié du plafond, rouge une fois atteint
+  // (au-delà, le RiskManager refuse toute nouvelle entrée).
+  if (connected && data.day_loss_pct != null && data.max_daily_loss_pct > 0) {
+    const loss = data.day_loss_pct;
+    const max = data.max_daily_loss_pct;
+    const row = document.createElement("div");
+    row.className = "mt-1 flex justify-between gap-2 border-t border-slate-700/60 pt-1";
+    const dt = document.createElement("dt");
+    dt.className = "text-slate-500";
+    dt.textContent = "Perte du jour";
+    const dd = document.createElement("dd");
+    const tone = loss >= max ? "text-red-400" : loss >= max / 2 ? "text-amber-400" : "text-slate-300";
+    dd.className = `font-mono ${tone}`;
+    dd.textContent = `${loss.toFixed(2)} / ${max} %`;
+    dd.title = loss >= max
+      ? "Limite atteinte : plus aucune entrée aujourd'hui (les sorties restent autorisées)."
+      : "Perte du jour rapportée à l'équité de début de journée UTC.";
+    row.append(dt, dd);
+    box.append(row);
+  }
+}
+
+async function refreshAccount() {
+  try {
+    const response = await fetch("/api/account");
+    renderAccount(response.ok ? await response.json() : null);
+  } catch (err) {
+    renderAccount(null);
+  }
+}
+
 async function refreshPositions() {
   const response = await fetch("/api/positions");
   if (!response.ok) return;
@@ -587,23 +646,13 @@ async function disconnectBroker() {
 }
 
 function initWebSocket() {
-  const statusEl = document.getElementById("ws-status");
-  // wss derrière HTTPS (reverse proxy sur un VPS) — ws:// y serait bloqué.
-  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-  const ws = new WebSocket(`${protocol}://${window.location.host}/ws`);
-  ws.onopen = () => {
-    statusEl.textContent = "● temps réel";
-    statusEl.className = "text-xs text-emerald-400";
-  };
-  ws.onclose = () => {
-    statusEl.textContent = "● hors ligne";
-    statusEl.className = "text-xs text-red-400";
-  };
-  ws.onmessage = (event) => {
+  // Reconnexion automatique gérée par le helper partagé (websocket.js) : un
+  // redémarrage du serveur ne doit pas laisser la page muette jusqu'au F5.
+  openLiveSocket((data) => {
     // Plus tard : dispatch par topic (market.tick → dernière bougie,
-    // strategy.signal → marqueurs, ea.status → header, log.line → logs).
-    console.debug("WS", JSON.parse(event.data));
-  };
+    // strategy.signal → marqueurs, ea.status → header).
+    console.debug("WS", data);
+  });
 }
 
 // --- Init ------------------------------------------------------------------
@@ -624,9 +673,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   await loadStatus();
   await loadSymbols();      // déclenche le premier rendu du graphique
   await refreshPositions();
+  await refreshAccount();
   await refreshLogs();
   scheduleRefresh();
   setInterval(refreshPositions, state.refreshSeconds * 1000);
+  setInterval(refreshAccount, state.refreshSeconds * 1000);
   setInterval(refreshLogs, 15000);
   // Prix de la watchlist rafraîchis à part (cadence lente : recalcul de
   // tous les symboles), en place — l'onglet actif n'est jamais perturbé.

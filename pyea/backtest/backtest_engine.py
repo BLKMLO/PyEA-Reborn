@@ -232,19 +232,43 @@ class BacktestEngine:
         self._risk = risk_manager
         self._size = float(risk_manager.max_position_size)  # échelle du P&L
 
-    def run(self, symbol: str, frame: pd.DataFrame, timeframe: str) -> BacktestResult:
+    def run(
+        self,
+        symbol: str,
+        frame: pd.DataFrame,
+        timeframe: str,
+        context: pd.DataFrame | None = None,
+    ) -> BacktestResult:
         """Exécute le backtest (synchrone : backtrader l'est ; les méthodes
-        asynchrones de la stratégie sont pontées sur une boucle dédiée)."""
+        asynchrones de la stratégie sont pontées sur une boucle dédiée).
+
+        ``context`` = bougies ANTÉRIEures à ``frame``, fournies à la chauffe de
+        la stratégie mais **jamais rejouées** : aucune décision n'y est prise,
+        aucun ordre, et elles n'entrent ni dans les statistiques ni dans la
+        courbe d'équité. Elles servent uniquement à ce que les indicateurs
+        soient déjà chauds à la PREMIÈRE bougie de ``frame``.
+
+        Sans contexte, les premières bougies de chaque bloc (~60 barres de
+        chauffe, davantage pour les indicateurs récursifs) donnent des features
+        NaN, donc zéro trade possible — un pli out-of-sample perdait ainsi le
+        début de sa période. Le contexte est strictement causal : ce sont des
+        bougies passées, antérieures au bloc évalué, jamais des bougies futures.
+        """
         n = len(frame)
         result = BacktestResult(symbol=symbol, timeframe=timeframe, bars=n)
         if n == 0:
             result.stats = _empty_stats(0)
             return result
 
+        warmup_frame = frame
+        if context is not None and not context.empty:
+            warmup_frame = pd.concat([context, frame])
+            warmup_frame = warmup_frame[~warmup_frame.index.duplicated(keep="last")]
+
         loop = asyncio.new_event_loop()
         try:
             loop.run_until_complete(self._strategy.warmup(
-                {"symbol": symbol, "timeframe": timeframe, "frame": frame}
+                {"symbol": symbol, "timeframe": timeframe, "frame": warmup_frame}
             ))
             strat = self._run_cerebro(symbol, frame, timeframe, loop)
         finally:

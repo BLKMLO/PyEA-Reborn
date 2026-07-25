@@ -73,11 +73,15 @@
         <pre id="log-lines" class="text-[11px] leading-relaxed text-slate-400"></pre>
       </div>
     </div>
-    <!-- P&L total en bas à droite -->
-    <div class="flex w-56 flex-col items-center justify-center border-l border-slate-700">
+    <!-- P&L total + état du compte en bas à droite. Tout vient du broker ou
+         du journal SQL : déconnecté, on affiche des tirets, jamais un chiffre
+         inventé. -->
+    <div class="flex w-56 flex-col items-center justify-center border-l border-slate-700 px-3">
       <div class="text-xs uppercase tracking-wide text-slate-400">P&amp;L total</div>
       <div id="total-pnl" class="mt-1 text-2xl font-semibold">—</div>
-      <div id="pnl-detail" class="mt-1 text-[11px] text-slate-500"></div>
+      <div id="pnl-detail" class="mt-1 text-center text-[11px] text-slate-500"></div>
+      <dl id="account-summary"
+          class="mt-3 w-full space-y-0.5 border-t border-slate-700/60 pt-2 text-[11px]"></dl>
     </div>
   </section>
 

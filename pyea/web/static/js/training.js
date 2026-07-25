@@ -232,23 +232,14 @@ function setProgress(payload) {
 }
 
 function initTrainingWebSocket() {
-  const statusEl = document.getElementById("ws-status");
-  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-  const ws = new WebSocket(`${protocol}://${window.location.host}/ws`);
-  ws.onopen = () => {
-    statusEl.textContent = "● temps réel";
-    statusEl.className = "text-xs text-emerald-400";
-  };
-  ws.onclose = () => {
-    statusEl.textContent = "● hors ligne";
-    statusEl.className = "text-xs text-red-400";
-  };
-  ws.onmessage = (event) => {
-    const data = JSON.parse(event.data);
+  // Reconnexion automatique (websocket.js) : un entraînement dure parfois des
+  // minutes, la progression doit survivre à une coupure passagère. Le polling
+  // de /api/training/jobs/{id} reste le filet de secours.
+  openLiveSocket((data) => {
     if (data.topic === "training.progress" && data.payload.job_id === currentJobId) {
       setProgress(data.payload);
     }
-  };
+  });
 }
 
 // --- Rendu -----------------------------------------------------------------

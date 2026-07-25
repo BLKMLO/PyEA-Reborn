@@ -18,11 +18,12 @@ logger = get_logger(__name__)
 
 EventHandler = Callable[[dict[str, Any]], Awaitable[None]]
 
-# Topics standard du système.
+# Topics standard du système. On n'en déclare que de RÉELLEMENT publiés :
+# `ea.status` et `log.line` ont existé sans jamais avoir de producteur — du
+# câblage mort qui laissait croire à un flux temps réel inexistant. L'état de
+# l'EA est servi par /api/status, les logs par /api/logs.
 TOPIC_TICK = "market.tick"
 TOPIC_SIGNAL = "strategy.signal"
-TOPIC_EA_STATUS = "ea.status"
-TOPIC_LOG = "log.line"
 TOPIC_TRAINING_PROGRESS = "training.progress"
 
 

@@ -16,16 +16,20 @@ from __future__ import annotations
 
 import random
 import zlib
+from functools import lru_cache
 from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from pyea.brokers.broker_runtime import broker_runtime
 from pyea.live.live_runtime import live_runtime
 from pyea.config.config_settings import get_settings
+from pyea.core.core_domain import AccountState
 from pyea.core.core_logging import get_logger, web_log_buffer
+from pyea.storage.storage_daily_equity import day_start_equity
 from pyea.storage.storage_trades import list_recent_trades
 from pyea.storage.storage_trading_state import (
     get_trading_states,
@@ -228,6 +232,27 @@ def _demo_origin_minute() -> int:
     return (now_minute // 1440) * 1440 - _DEMO_HISTORY_MINUTES
 
 
+@lru_cache(maxsize=128)
+def _demo_closes(symbol: str, origin: int, end_minute: int) -> tuple[float, ...]:
+    """Marche aléatoire déterministe des closes, de ``origin`` à ``end_minute``.
+
+    C'est LA source unique du prix de démo : le graphique et la watchlist la
+    partagent, donc ils ne peuvent pas diverger. Mémorisée parce qu'elle est
+    cumulative depuis l'origine : sans cache, servir la watchlist recalculait
+    ~4 300 tirages par symbole — plus de 130 000 par appel de /api/symbols,
+    toutes les 10 s. Le cache est indexé par minute de fin : au changement de
+    minute une entrée neuve est calculée, les précédentes s'évincent d'elles-
+    mêmes (LRU).
+    """
+    base = _base_price(symbol)
+    price = base
+    closes: list[float] = []
+    for minute in range(origin, end_minute + 1):
+        price += random.Random(f"{symbol}:{minute}").uniform(-1, 1) * base * 0.0008
+        closes.append(price)
+    return tuple(closes)
+
+
 def _demo_candles(symbol: str, end_minute: int, points: int) -> list[dict[str, float]]:
     """Bougies M1 déterministes se terminant à ``end_minute`` inclus.
 
@@ -236,52 +261,54 @@ def _demo_candles(symbol: str, end_minute: int, points: int) -> list[dict[str, f
     bougies, et la pagination vers le passé reste cohérente.
     """
     origin = _demo_origin_minute()
-    start_minute = max(origin, end_minute - points + 1)
     if end_minute < origin:
         return []
+    start_minute = max(origin, end_minute - points + 1)
     base = _base_price(symbol)
-    price = base
+    closes = _demo_closes(symbol, origin, end_minute)
     candles: list[dict[str, float]] = []
-    for minute in range(origin, end_minute + 1):
+    for minute in range(start_minute, end_minute + 1):
+        close = closes[minute - origin]
+        # Le close précédent est l'open (marche continue) ; l'origine s'ouvre
+        # sur le prix de base.
+        open_ = closes[minute - origin - 1] if minute > origin else base
+        # Même séquence de tirages que la marche : le 1er uniform a produit le
+        # close, les deux suivants donnent les mèches.
         rng = random.Random(f"{symbol}:{minute}")
-        open_ = price
-        close = open_ + rng.uniform(-1, 1) * base * 0.0008
-        if minute >= start_minute:
-            high = max(open_, close) + rng.uniform(0, base * 0.0004)
-            low = min(open_, close) - rng.uniform(0, base * 0.0004)
-            candles.append(
-                {
-                    "time": minute * 60,  # secondes epoch (format Lightweight Charts)
-                    "open": round(open_, 5),
-                    "high": round(high, 5),
-                    "low": round(low, 5),
-                    "close": round(close, 5),
-                }
-            )
-        price = close
+        rng.uniform(-1, 1)
+        high = max(open_, close) + rng.uniform(0, base * 0.0004)
+        low = min(open_, close) - rng.uniform(0, base * 0.0004)
+        candles.append(
+            {
+                "time": minute * 60,  # secondes epoch (format Lightweight Charts)
+                "open": round(open_, 5),
+                "high": round(high, 5),
+                "low": round(low, 5),
+                "close": round(close, 5),
+            }
+        )
     return candles
 
 
 def _demo_quote(symbol: str) -> tuple[float, float]:
     """Dernier prix et variation sur ~24 h (démo déterministe).
 
-    Rejoue la MÊME marche aléatoire que ``_demo_candles`` (seed
-    symbole+minute) depuis l'origine fixe jusqu'à maintenant : le prix
-    renvoyé est donc exactement le close de la dernière bougie du
-    graphique. La variation compare le prix courant à celui d'il y a
-    1440 minutes (une « journée » de démo).
+    Lit la MÊME marche que ``_demo_candles`` (``_demo_closes``) : le prix
+    renvoyé est donc exactement le close de la dernière bougie du graphique.
+    La variation compare le prix courant à celui d'il y a 1440 minutes (une
+    « journée » de démo).
     """
     origin = _demo_origin_minute()
     now_minute = int(datetime.now(timezone.utc).timestamp() // 60)
-    base = _base_price(symbol)
+    closes = _demo_closes(symbol, origin, now_minute)
+    price = closes[-1]
     day_ago_minute = now_minute - 1440
-    price = base
-    reference = base  # avant un jour complet d'historique : pas de variation
-    for minute in range(origin, now_minute + 1):
-        rng = random.Random(f"{symbol}:{minute}")
-        price = price + rng.uniform(-1, 1) * base * 0.0008
-        if minute == day_ago_minute:
-            reference = price
+    # Avant un jour complet d'historique : pas de variation calculable.
+    reference = (
+        closes[day_ago_minute - origin]
+        if day_ago_minute >= origin
+        else _base_price(symbol)
+    )
     change_pct = (price - reference) / reference * 100 if reference else 0.0
     return round(price, 5), round(change_pct, 2)
 
@@ -304,6 +331,47 @@ async def get_price_history(
     candles = _demo_candles(symbol, end_minute, points)
     has_more = bool(candles) and candles[0]["time"] // 60 > _demo_origin_minute()
     return {"symbol": symbol, "candles": candles, "has_more": has_more}
+
+
+@router.get("/account")
+async def get_account() -> dict[str, Any]:
+    """Résumé du compte chez le broker : équité, solde, marge, P&L.
+
+    100 % broker : les deux gateways le fournissent (`get_account_summary`).
+    Broker déconnecté → ``{}`` et ``connected: false`` — l'interface affiche
+    des tirets plutôt qu'un chiffre inventé.
+
+    ``day_loss_pct`` compare l'équité au repère de début de journée UTC (le
+    même que celui du RiskManager), pour que l'utilisateur voie où il en est
+    par rapport à sa limite de perte journalière.
+    """
+    gateway = broker_runtime.gateway
+    if not broker_runtime.is_connected() or gateway is None:
+        return {"connected": False, "summary": {}, "day_loss_pct": None,
+                "max_daily_loss_pct": get_settings().risk_max_daily_loss_pct}
+    try:
+        summary = await gateway.get_account_summary()
+    except Exception as exc:  # broker momentanément muet
+        logger.warning("Résumé de compte indisponible : %s", exc)
+        raise HTTPException(status_code=502, detail=f"Compte illisible : {exc}")
+
+    day_loss_pct = None
+    equity = summary.get("equity")
+    if equity:
+        reference = await run_in_threadpool(
+            day_start_equity, datetime.now(timezone.utc).date(), float(equity)
+        )
+        day_loss_pct = round(
+            AccountState(equity=float(equity), day_start_equity=reference).day_loss_pct
+            or 0.0,
+            2,
+        )
+    return {
+        "connected": True,
+        "summary": summary,
+        "day_loss_pct": day_loss_pct,
+        "max_daily_loss_pct": get_settings().risk_max_daily_loss_pct,
+    }
 
 
 @router.get("/positions")
