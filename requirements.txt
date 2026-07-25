@@ -8,7 +8,11 @@
 #   2. Si 3.13 (ou plus récent) est imposé, installer un par un pour isoler
 #      le paquet fautif :
 #      pip install fastapi "uvicorn[standard]" jinja2 pydantic-settings PyYAML ^
-#        SQLAlchemy ib_async pandas numpy pyarrow lightgbm pytest httpx
+#        SQLAlchemy ib_async MetaTrader5 pandas numpy pyarrow lightgbm pytest httpx
+#
+# NB : backtrader n'est VOLONTAIREMENT pas listé (vendorisé dans lib/) — voir
+# la note en fin de fichier. Ne pas l'installer par pip : la copie du dépôt
+# doit rester la seule version utilisée.
 
 # Backend web
 fastapi>=0.115
@@ -26,9 +30,11 @@ SQLAlchemy>=2.0
 ib_async>=1.0
 
 # Broker MetaTrader 5 — paquet officiel, Windows UNIQUEMENT (IPC vers le
-# terminal MT5). Non installable sous Linux/macOS (dev/CI), d'où l'import
-# paresseux dans broker_metatrader.py : décommenter sur le poste Windows.
-# MetaTrader5>=5.0.45 ; sys_platform == "win32"
+# terminal MT5). Le marqueur d'environnement fait que pip l'installe sur
+# Windows et l'IGNORE ailleurs (Linux/macOS de dev/CI) : la ligne peut donc
+# rester active pour tout le monde. L'import reste paresseux dans
+# broker_metatrader.py, pour que l'app démarre même sans le paquet.
+MetaTrader5>=5.0.45 ; sys_platform == "win32"
 
 # Stratégie (Couleuvre_v0.1 — logique développée plus tard)
 lightgbm>=4.3

@@ -236,3 +236,29 @@ def test_trades_affiches_viennent_du_journal_sql() -> None:
         data = client.get("/api/positions").json()
     assert any(t["broker_order_id"] == "ORD-1" and t["symbol"] == "EURUSD"
                for t in data["trades"])
+
+
+def test_compte_honnete_broker_deconnecte() -> None:
+    """Broker déconnecté : aucun chiffre de compte inventé."""
+    with _client() as client:
+        payload = client.get("/api/account").json()
+    assert payload["connected"] is False
+    assert payload["summary"] == {}
+    assert payload["day_loss_pct"] is None
+    # Le plafond configuré reste exposé (l'UI l'affiche à côté de la perte).
+    assert payload["max_daily_loss_pct"] == get_settings().risk_max_daily_loss_pct
+
+
+def test_relais_du_bus_non_empiles() -> None:
+    """Démarrer l'app deux fois ne doit pas dupliquer les relais WebSocket.
+
+    Le bus est un singleton de module : sans désabonnement à l'arrêt, chaque
+    démarrage empilait un jeu de relais et le même tick partait N fois vers
+    les navigateurs."""
+    from pyea.core.core_events import TOPIC_TICK, event_bus
+
+    avant = len(event_bus._subscribers.get(TOPIC_TICK, []))
+    for _ in range(3):
+        with TestClient(create_app()):
+            pass
+    assert len(event_bus._subscribers.get(TOPIC_TICK, [])) == avant

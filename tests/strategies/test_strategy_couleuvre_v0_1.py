@@ -181,7 +181,10 @@ def test_walkforward_bout_en_bout(tmp_path) -> None:
     )
     assert report["cancelled"] is False
     assert set(report["oos_stats"]) == {
-        "trades", "total_pnl", "win_rate", "max_drawdown", "profit_factor"
+        "trades", "total_pnl", "win_rate", "max_drawdown", "profit_factor",
+        # Les coûts de transaction sont remontés au niveau OOS : c'est l'écart
+        # entre « ça a l'air de marcher » et « ça marche ».
+        "total_costs", "costs_modelled",
     }
     assert (tmp_path / "metadata.json").exists()
     assert (tmp_path / "fold_1" / "model.txt").exists()  # modèle par pli sauvé

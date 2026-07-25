@@ -18,7 +18,20 @@ Modèle d'exécution (fidèle à l'ancien, validé bougie à bougie) :
   backtrader retient le **stop** (convention conservatrice, comme l'ancien) ;
 - **clôture forcée de fin de semaine ISO** et **liquidation finale** : ordre
   Market de clôture (jamais de portage week-end, position résiduelle liquidée) ;
-- une position à la fois (plafond du RiskManager).
+- une position à la fois (plafond du RiskManager) ;
+- **coûts de transaction** : le spread est MESURÉ dans les données (médiane de
+  ``ask_close - bid_close`` — le téléchargeur stocke les deux côtés depuis
+  toujours, le moteur ne lisait que le bid) et facturé en coût FIXE par côté,
+  si bien qu'un aller-retour paie exactement un spread ; s'y ajoute une
+  commission optionnelle (``costs.commission_per_unit``). Modéliser le coût
+  ainsi plutôt qu'en décalant les prix garde les barrières remplies à leur prix
+  EXACT — ce qui est correct, le flux étant en bid : un long sort bien au bid,
+  un short entre bien au bid. **Approximation résiduelle assumée** : pour un
+  SHORT, la sortie est un achat à l'ask, donc ses barrières sont franchies au
+  bid décalé d'un spread ; le coût total est exact, seul le départage d'un
+  franchissement quasi simultané peut différer. Sans colonnes ask, AUCUN coût
+  n'est modélisé et ``stats["costs_modelled"]`` vaut False — l'interface le
+  signale au lieu d'afficher un zéro trompeur.
 
 Détails d'implémentation :
 - on ne trade qu'**1 unité** nominale dans backtrader ; le P&L linéaire est
@@ -57,6 +70,31 @@ MAX_EQUITY_POINTS = 500       # Taille max de la courbe renvoyée à l'interface
 _NOMINAL_CASH = 1_000_000.0   # Capital nominal backtrader (on ne trade qu'1 unité).
 
 
+def measure_spread(frame: pd.DataFrame) -> float | None:
+    """Spread MOYEN observé dans les données (``ask_close - bid_close``).
+
+    Le téléchargeur Dukascopy stocke les deux côtés depuis toujours ; jusqu'ici
+    le moteur n'utilisait que le bid, donc les backtests achetaient et
+    revendaient au même prix — un aller-retour gratuit, qui n'existe pas.
+
+    Retourne ``None`` si le frame n'a pas de colonne ask (frames de test,
+    historiques bid seul) : dans ce cas AUCUN spread n'est modélisé et le
+    résultat le signale explicitement (``costs_modelled``), plutôt que de
+    deviner une valeur plausible.
+
+    On retient la MÉDIANE : le spread s'élargit brutalement à l'ouverture, sur
+    les annonces et le week-end ; une moyenne serait tirée par ces pointes et
+    surestimerait le coût du régime normal.
+    """
+    if "ask_close" not in frame.columns or "bid_close" not in frame.columns:
+        return None
+    spread = (frame["ask_close"] - frame["bid_close"]).dropna()
+    spread = spread[spread > 0]
+    if spread.empty:
+        return None
+    return float(spread.median())
+
+
 def _last_bars_of_week(index: pd.DatetimeIndex) -> list[bool]:
     """Marque, pour chaque bougie, si elle est la dernière de sa semaine ISO.
 
@@ -88,7 +126,9 @@ class BacktestTrade:
     entry_price: float
     exit_time: datetime
     exit_price: float
-    pnl: float
+    pnl: float          # NET de spread et commission — le résultat réel
+    gross_pnl: float = 0.0   # avant coûts (diagnostic)
+    cost: float = 0.0        # spread + commission payés sur l'aller-retour
 
 
 @dataclass
@@ -139,18 +179,22 @@ class _StrategyBridge(bt.Strategy):
             return
         side = self._open_side
         entry_price = self._entry_price
-        pnl = trade.pnl  # net, correct même sous cheat-on-close
+        gross = trade.pnl          # avant coûts
+        net = trade.pnlcomm        # après spread + commission — c'est le vrai
         if self._pending_exit is not None:      # clôture forcée : temps/prix connus
             exit_time, exit_price = self._pending_exit
         else:                                   # barrière : prix reconstruit du P&L
             bar = min(len(self.data) - 1, self.p.n - 1)
             exit_time = self.p.index[bar]
-            exit_price = entry_price + pnl if side == "long" else entry_price - pnl
+            # Reconstruction à partir du P&L BRUT : les coûts ne déplacent pas
+            # le prix auquel la barrière a été touchée.
+            exit_price = entry_price + gross if side == "long" else entry_price - gross
         self.trades.append({
             "side": "BUY" if side == "long" else "SELL",
             "entry_time": self._entry_time, "entry_price": entry_price,
             "exit_time": exit_time, "exit_price": round(exit_price, 5),
-            "pnl": round(pnl, 5),
+            "pnl": round(net, 5), "gross_pnl": round(gross, 5),
+            "cost": round(gross - net, 5),
         })
         self._open_side = None
         self._entry_time = self._entry_price = self._pending_exit = None
@@ -227,45 +271,98 @@ class _StrategyBridge(bt.Strategy):
 class BacktestEngine:
     """Simule la boucle de trading sur un historique via backtrader."""
 
-    def __init__(self, strategy: Strategy, risk_manager: RiskManager) -> None:
+    def __init__(
+        self,
+        strategy: Strategy,
+        risk_manager: RiskManager,
+        commission_per_unit: float = 0.0,
+    ) -> None:
         self._strategy = strategy
         self._risk = risk_manager
-        self._size = float(risk_manager._max_position_size)  # échelle du P&L
+        self._size = float(risk_manager.max_position_size)  # échelle du P&L
+        # Commission éventuelle du courtier, PAR CÔTÉ et par unité, en unités
+        # de prix (même échelle que le spread, pour se composer avec le P&L).
+        self._commission = float(commission_per_unit)
 
-    def run(self, symbol: str, frame: pd.DataFrame, timeframe: str) -> BacktestResult:
+    def run(
+        self,
+        symbol: str,
+        frame: pd.DataFrame,
+        timeframe: str,
+        context: pd.DataFrame | None = None,
+    ) -> BacktestResult:
         """Exécute le backtest (synchrone : backtrader l'est ; les méthodes
-        asynchrones de la stratégie sont pontées sur une boucle dédiée)."""
+        asynchrones de la stratégie sont pontées sur une boucle dédiée).
+
+        ``context`` = bougies ANTÉRIEures à ``frame``, fournies à la chauffe de
+        la stratégie mais **jamais rejouées** : aucune décision n'y est prise,
+        aucun ordre, et elles n'entrent ni dans les statistiques ni dans la
+        courbe d'équité. Elles servent uniquement à ce que les indicateurs
+        soient déjà chauds à la PREMIÈRE bougie de ``frame``.
+
+        Sans contexte, les premières bougies de chaque bloc (~60 barres de
+        chauffe, davantage pour les indicateurs récursifs) donnent des features
+        NaN, donc zéro trade possible — un pli out-of-sample perdait ainsi le
+        début de sa période. Le contexte est strictement causal : ce sont des
+        bougies passées, antérieures au bloc évalué, jamais des bougies futures.
+        """
         n = len(frame)
         result = BacktestResult(symbol=symbol, timeframe=timeframe, bars=n)
         if n == 0:
             result.stats = _empty_stats(0)
             return result
 
+        warmup_frame = frame
+        if context is not None and not context.empty:
+            warmup_frame = pd.concat([context, frame])
+            warmup_frame = warmup_frame[~warmup_frame.index.duplicated(keep="last")]
+
+        # Coûts de transaction : spread RÉEL mesuré dans les données + éventuelle
+        # commission. Sans eux, un aller-retour est gratuit — ce qui n'existe pas.
+        spread = measure_spread(frame)
+        cost_per_side = (0.0 if spread is None else spread / 2.0) + self._commission
+
         loop = asyncio.new_event_loop()
         try:
             loop.run_until_complete(self._strategy.warmup(
-                {"symbol": symbol, "timeframe": timeframe, "frame": frame}
+                {"symbol": symbol, "timeframe": timeframe, "frame": warmup_frame}
             ))
-            strat = self._run_cerebro(symbol, frame, timeframe, loop)
+            strat = self._run_cerebro(symbol, frame, timeframe, loop, cost_per_side)
         finally:
             try:
                 loop.run_until_complete(self._strategy.shutdown())
             finally:
                 loop.close()
 
-        self._collect(result, strat)
+        self._collect(result, strat, spread)
         logger.info(
-            "Backtest %s %s : %d bougies, %d trades, P&L %.5f",
+            "Backtest %s %s : %d bougies, %d trades, P&L net %.5f "
+            "(coûts %.5f, spread %s)",
             symbol, timeframe, n, len(result.trades), result.stats["total_pnl"],
+            result.stats["total_costs"],
+            "non modélisé" if spread is None else f"{spread:.5f}",
         )
         return result
 
     # -- interne ------------------------------------------------------------
-    def _run_cerebro(self, symbol, frame, timeframe, loop) -> _StrategyBridge:
+    def _run_cerebro(
+        self, symbol, frame, timeframe, loop, cost_per_side: float
+    ) -> _StrategyBridge:
         feed = _to_backtrader_feed(frame)
         cerebro = bt.Cerebro(stdstats=False)
         cerebro.broker.set_coc(True)           # entrée/clôture au close de décision
         cerebro.broker.setcash(_NOMINAL_CASH)
+        # Coût FIXE par unité et par côté : un aller-retour paie donc exactement
+        # un spread (deux demi-spreads) plus deux commissions. Modéliser le coût
+        # ainsi — plutôt qu'en décalant les prix — garde les barrières remplies
+        # à leur prix EXACT, ce qui est correct : le flux est en bid, or un long
+        # sort bien au bid (et un short entre bien au bid).
+        if cost_per_side > 0:
+            cerebro.broker.setcommission(
+                commission=cost_per_side,
+                commtype=bt.CommInfoBase.COMM_FIXED,
+                stocklike=True,
+            )
         cerebro.adddata(feed)
         cerebro.addstrategy(
             _StrategyBridge,
@@ -284,7 +381,9 @@ class BacktestEngine:
         cerebro.addanalyzer(bt.analyzers.SQN, _name="sqn")
         return cerebro.run()[0]
 
-    def _collect(self, result: BacktestResult, strat: _StrategyBridge) -> None:
+    def _collect(
+        self, result: BacktestResult, strat: _StrategyBridge, spread: float | None
+    ) -> None:
         size = self._size
         result.trades = [
             BacktestTrade(
@@ -292,11 +391,13 @@ class BacktestEngine:
                 entry_time=t["entry_time"], entry_price=t["entry_price"],
                 exit_time=t["exit_time"], exit_price=t["exit_price"],
                 pnl=round(t["pnl"] * size, 5),
+                gross_pnl=round(t["gross_pnl"] * size, 5),
+                cost=round(t["cost"] * size, 5),
             )
             for t in strat.trades
         ]
         result.equity_curve = _downsample_equity(strat.equity, size, result.bars)
-        result.stats = _build_stats(result, strat, size)
+        result.stats = _build_stats(result, strat, size, spread, self._commission)
 
 
 # --------------------------------------------------------------------------
@@ -358,13 +459,19 @@ def _empty_stats(bars: int) -> dict[str, Any]:
         "max_drawdown": 0.0, "sharpe_ratio": None, "sqn": None,
         "profit_factor": None, "avg_trade_pnl": None,
         "best_trade": None, "worst_trade": None,
+        "gross_pnl": 0.0, "total_costs": 0.0,
+        "costs_modelled": False, "spread": None, "commission_per_unit": 0.0,
     }
 
 
 def _build_stats(
-    result: BacktestResult, strat: _StrategyBridge, size: float
+    result: BacktestResult,
+    strat: _StrategyBridge,
+    size: float,
+    spread: float | None,
+    commission: float,
 ) -> dict[str, Any]:
-    pnls = [t.pnl for t in result.trades]
+    pnls = [t.pnl for t in result.trades]  # NETS : toutes les stats sont nettes
     wins = [p for p in pnls if p > 0]
     gross_win = sum(p for p in pnls if p > 0)
     gross_loss = -sum(p for p in pnls if p < 0)
@@ -379,7 +486,14 @@ def _build_stats(
     return {
         "bars": result.bars,
         "trades": len(pnls),
-        "total_pnl": round(sum(pnls), 5),
+        "total_pnl": round(sum(pnls), 5),  # net de coûts
+        "gross_pnl": round(sum(t.gross_pnl for t in result.trades), 5),
+        "total_costs": round(sum(t.cost for t in result.trades), 5),
+        # False = les données n'avaient pas de colonnes ask : AUCUN spread n'a
+        # été modélisé, et l'interface doit le dire (résultat optimiste).
+        "costs_modelled": spread is not None or commission > 0,
+        "spread": None if spread is None else round(spread, 6),
+        "commission_per_unit": commission,
         "win_rate": round(len(wins) / len(pnls), 4) if pnls else None,
         "max_drawdown": _max_drawdown(result.equity_curve),
         "sharpe_ratio": round(sharpe, 4) if sharpe is not None else None,

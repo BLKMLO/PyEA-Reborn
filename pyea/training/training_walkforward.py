@@ -33,6 +33,13 @@ logger = get_logger(__name__)
 ProgressCallback = Callable[[dict[str, Any]], None]
 CancelCheck = Callable[[], bool]
 
+#: Bougies de contexte (fin du bloc d'entraînement) données à la chauffe de la
+#: stratégie avant chaque bloc de test. Confortablement au-dessus des fenêtres
+#: de features (la plus longue vaut 50, ``WARMUP_BARS`` = 60) pour que les
+#: indicateurs RÉCURSIFS (EMA, lissage de Wilder), qui n'ont pas de fenêtre
+#: finie, soient stabilisés dès la première bougie évaluée.
+OOS_CONTEXT_BARS = 300
+
 
 @dataclass
 class WalkForwardFold:
@@ -82,6 +89,7 @@ def run_walkforward(
     artifacts_dir: Path,
     progress: ProgressCallback,
     cancelled: CancelCheck,
+    commission_per_unit: float = 0.0,
 ) -> dict[str, Any]:
     """Exécute le walk-forward complet ; conçu pour tourner dans un thread.
 
@@ -132,8 +140,15 @@ def run_walkforward(
 
         progress({"fold": i + 1, "total": n_folds, "phase": "test",
                   "message": f"Pli {i + 1}/{n_folds} : backtest out-of-sample…"})
-        engine = BacktestEngine(strategy, risk_manager)
-        result = engine.run(symbol, test_frame, timeframe)
+        engine = BacktestEngine(strategy, risk_manager, commission_per_unit)
+        # La fin du bloc d'ENTRAÎNEMENT sert de contexte de chauffe : sans
+        # elle, les ~60 premières bougies de chaque bloc de test donnaient des
+        # features NaN, donc zéro trade — chaque pli perdait le début de sa
+        # période OOS. Ces bougies ne sont PAS rejouées (aucune décision, aucun
+        # trade, aucune statistique) et sont strictement antérieures au bloc :
+        # pas de fuite, c'est du passé que le modèle a déjà vu à l'entraînement.
+        context = train_frame.tail(OOS_CONTEXT_BARS)
+        result = engine.run(symbol, test_frame, timeframe, context=context)
         fold.test_stats = result.stats
 
         # Courbe OOS concaténée : chaque pli repart du cumul précédent.
@@ -166,6 +181,10 @@ def _report(
 ) -> dict[str, Any]:
     trades = sum(fold.test_stats.get("trades", 0) for fold in folds)
     total_pnl = round(sum(fold.test_stats.get("total_pnl", 0.0) for fold in folds), 5)
+    # Coûts (spread + commission) payés sur l'ensemble des trades OOS. Affichés
+    # à part : c'est l'écart entre « ça a l'air de marcher » et « ça marche ».
+    total_costs = round(sum(fold.test_stats.get("total_costs", 0.0) for fold in folds), 5)
+    costs_modelled = any(fold.test_stats.get("costs_modelled") for fold in folds)
     equity_values = [point["equity"] for point in oos_equity]
     max_drawdown, peak = 0.0, float("-inf")
     for value in equity_values:
@@ -192,6 +211,8 @@ def _report(
             "win_rate": win_rate,
             "max_drawdown": round(max_drawdown, 5),
             "profit_factor": profit_factor,
+            "total_costs": total_costs,
+            "costs_modelled": costs_modelled,
         },
         "oos_equity_curve": oos_equity[:2000],
     }

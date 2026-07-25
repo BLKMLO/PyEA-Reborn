@@ -8,6 +8,8 @@ attendues sont donc les mêmes qu'avec l'ancien moteur maison.
 
 from typing import Any
 
+import numpy as np
+import pytest
 import pandas as pd
 
 from pyea.backtest import BacktestEngine
@@ -235,3 +237,121 @@ def test_cloture_forcee_fin_de_semaine() -> None:
     assert trade.exit_time == index[1]  # vendredi, pas lundi
     assert trade.exit_price == 1.2
     assert trade.pnl == round(0.2 * size, 5)
+
+
+def test_contexte_de_chauffe_nest_jamais_rejoue() -> None:
+    """Le contexte chauffe la stratégie mais ne produit NI trade NI statistique.
+
+    Sans lui, les premières bougies de chaque bloc out-of-sample donnaient des
+    features NaN (zéro trade possible) ; avec lui, elles doivent être évaluées
+    — mais les bougies de contexte elles-mêmes restent hors du backtest.
+    """
+    index = pd.date_range("2024-01-01", periods=30, freq="1h", tz="UTC")
+    frame = pd.DataFrame({"bid_close": np.linspace(1.0, 1.3, 30)}, index=index)
+    contexte = pd.DataFrame(
+        {"bid_close": np.linspace(0.7, 1.0, 40)},
+        index=pd.date_range("2023-12-29", periods=40, freq="1h", tz="UTC"),
+    )
+    vues: list[pd.DataFrame] = []
+
+    class _Espion(ScriptedStrategy):
+        async def warmup(self, params: dict[str, Any]) -> None:
+            vues.append(params["frame"])
+
+    # Entrée à la bougie 2 du bloc évalué, sortie à la 10.
+    engine = BacktestEngine(
+        _Espion({2: SignalAction.ENTER_LONG, 10: SignalAction.EXIT}),
+        RiskManager(get_settings()),
+    )
+    result = engine.run("EURUSD", frame, "H1", context=contexte)
+
+    # La chauffe voit contexte + bloc évalué...
+    assert len(vues[0]) == 70
+    # ...mais le backtest ne compte que le bloc évalué.
+    assert result.bars == 30
+    assert all(t.entry_time >= index[0] for t in result.trades)
+    assert all(ts >= index[0] for ts, _ in result.equity_curve)
+
+
+# --- Coûts de transaction --------------------------------------------------
+# Sans eux, un aller-retour est GRATUIT : on achetait et revendait au bid, donc
+# le backtest ne payait jamais le spread. Tous les résultats étaient optimistes.
+
+_SPREAD = 0.0002
+
+
+def _frame_avec_ask(n: int = 12) -> pd.DataFrame:
+    index = pd.date_range("2024-01-01", periods=n, freq="1h", tz="UTC")
+    bid = np.linspace(1.0, 1.0 + 0.01 * (n - 1), n)
+    return pd.DataFrame({"bid_close": bid, "ask_close": bid + _SPREAD}, index=index)
+
+
+# Deux allers-retours complets.
+_ALLERS_RETOURS = {
+    1: SignalAction.ENTER_LONG, 4: SignalAction.EXIT,
+    6: SignalAction.ENTER_LONG, 9: SignalAction.EXIT,
+}
+
+
+def test_un_aller_retour_paie_exactement_un_spread() -> None:
+    frame = _frame_avec_ask()
+    engine = BacktestEngine(
+        ScriptedStrategy(dict(_ALLERS_RETOURS)), RiskManager(get_settings())
+    )
+    result = engine.run("EURUSD", frame, "H1")
+    size = get_settings().risk_max_position_size
+
+    assert result.stats["trades"] == 2
+    assert result.stats["spread"] == pytest.approx(_SPREAD)
+    assert result.stats["costs_modelled"] is True
+    # Le coût total vaut exactement 1 spread × 2 allers-retours.
+    assert result.stats["total_costs"] == pytest.approx(2 * _SPREAD * size)
+    # Et le P&L net est le brut diminué de ces coûts.
+    assert result.stats["total_pnl"] == pytest.approx(
+        result.stats["gross_pnl"] - result.stats["total_costs"]
+    )
+    assert all(t.cost == pytest.approx(_SPREAD * size) for t in result.trades)
+
+
+def test_commission_facturee_par_cote() -> None:
+    commission = 0.00005
+    engine = BacktestEngine(
+        ScriptedStrategy(dict(_ALLERS_RETOURS)),
+        RiskManager(get_settings()),
+        commission_per_unit=commission,
+    )
+    result = engine.run("EURUSD", _frame_avec_ask(), "H1")
+    size = get_settings().risk_max_position_size
+    # Par aller-retour : un spread + DEUX commissions (une à l'entrée, une à
+    # la sortie).
+    attendu = 2 * (_SPREAD + 2 * commission) * size
+    assert result.stats["total_costs"] == pytest.approx(attendu)
+
+
+def test_sans_colonne_ask_aucun_cout_invente() -> None:
+    """Pas de données ask → aucun spread modélisé, et le résultat le DIT.
+
+    Deviner un spread « plausible » serait pire que de ne rien modéliser :
+    l'utilisateur doit savoir que le chiffre affiché est optimiste."""
+    frame = _frame_avec_ask()[["bid_close"]]
+    engine = BacktestEngine(
+        ScriptedStrategy(dict(_ALLERS_RETOURS)), RiskManager(get_settings())
+    )
+    result = engine.run("EURUSD", frame, "H1")
+    assert result.stats["spread"] is None
+    assert result.stats["costs_modelled"] is False
+    assert result.stats["total_costs"] == 0.0
+    assert result.stats["total_pnl"] == result.stats["gross_pnl"]
+
+
+def test_spread_median_ignore_les_pointes() -> None:
+    """Le spread s'élargit brutalement à l'ouverture et sur les annonces : la
+    médiane décrit le régime normal, la moyenne serait tirée par les pointes."""
+    from pyea.backtest.backtest_engine import measure_spread
+
+    index = pd.date_range("2024-01-01", periods=11, freq="1h", tz="UTC")
+    bid = np.full(11, 1.0)
+    ask = bid + _SPREAD
+    ask[-1] = bid[-1] + 0.01  # pointe de spread (×50)
+    frame = pd.DataFrame({"bid_close": bid, "ask_close": ask}, index=index)
+    assert measure_spread(frame) == pytest.approx(_SPREAD)

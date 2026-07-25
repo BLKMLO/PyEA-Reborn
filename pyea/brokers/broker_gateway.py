@@ -10,9 +10,14 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Awaitable, Callable, Type
 
-from pyea.core.core_domain import OrderRequest, Position, TickData
+from pyea.core.core_domain import ExecutionReport, OrderRequest, Position, TickData
+from pyea.core.core_logging import get_logger
+
+logger = get_logger(__name__)
 
 TickCallback = Callable[[TickData], Awaitable[None]]
+#: Reçoit chaque compte rendu d'exécution rapporté par le broker.
+ExecutionCallback = Callable[[ExecutionReport], Awaitable[None]]
 
 _REGISTRY: dict[str, Type["BrokerGateway"]] = {}
 
@@ -62,6 +67,39 @@ class BrokerGateway(ABC):
     @abstractmethod
     async def cancel_order(self, order_id: str) -> None:
         """Annule un ordre en attente."""
+
+    # --- Comptes rendus d'exécution ---
+    #: Destinataire des ``ExecutionReport`` (câblé par ``LiveRuntime``).
+    _execution_callback: ExecutionCallback | None = None
+
+    def set_execution_callback(self, callback: ExecutionCallback | None) -> None:
+        """Branche (ou débranche) le destinataire des comptes rendus.
+
+        ``place_order`` ne fait que SOUMETTRE : c'est par ce canal que le
+        moteur live apprend ce que le broker a réellement fait de l'ordre
+        (rempli, annulé, refusé) — ce qui libère la réservation d'ordre en vol
+        et alimente le journal des trades. Une gateway qui ne sait pas
+        rapporter ses exécutions n'appelle simplement jamais le callback : le
+        moteur ne journalisera alors aucun trade, plutôt que d'en inventer.
+        """
+        self._execution_callback = callback
+
+    async def _emit_execution(self, report: ExecutionReport) -> None:
+        """À appeler par l'implémentation quand le broker rapporte un sort.
+
+        Défensif : une erreur du destinataire ne doit jamais casser le flux
+        d'exécutions du broker (même principe que l'isolation du bus).
+        """
+        callback = self._execution_callback
+        if callback is None:
+            return
+        try:
+            await callback(report)
+        except Exception as exc:  # pragma: no cover - défensif
+            logger.warning(
+                "Traitement du compte rendu d'exécution %s en échec : %s.",
+                report.order_id, exc,
+            )
 
     # --- État du compte ---
     @abstractmethod

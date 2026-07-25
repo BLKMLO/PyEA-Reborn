@@ -1,9 +1,12 @@
 """Route WebSocket : flux temps réel vers le dashboard.
 
 Le ``ConnectionManager`` est abonné au bus d'événements : tout ce qui est
-publié sur les topics suivis (ticks, signaux, état EA, logs) est relayé
-tel quel aux navigateurs connectés, au format
+publié sur les topics suivis (ticks, signaux, progression d'entraînement) est
+relayé tel quel aux navigateurs connectés, au format
 ``{"topic": ..., "payload": {...}}``.
+
+On ne relaie QUE des topics réellement publiés : relayer un topic sans
+producteur donne l'illusion d'un flux temps réel qui n'existe pas.
 """
 
 from __future__ import annotations
@@ -13,8 +16,6 @@ from typing import Any
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from pyea.core.core_events import (
-    TOPIC_EA_STATUS,
-    TOPIC_LOG,
     TOPIC_SIGNAL,
     TOPIC_TICK,
     TOPIC_TRAINING_PROGRESS,
@@ -28,8 +29,6 @@ router = APIRouter(tags=["websocket"])
 RELAYED_TOPICS = (
     TOPIC_TICK,
     TOPIC_SIGNAL,
-    TOPIC_EA_STATUS,
-    TOPIC_LOG,
     TOPIC_TRAINING_PROGRESS,
 )
 
@@ -56,9 +55,18 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+#: Relais actuellement abonnés au bus (topic, handler), pour pouvoir les
+#: retirer à l'arrêt. Le bus est un singleton de module : sans désabonnement,
+#: chaque démarrage d'application EMPILAIT un jeu de relais supplémentaire, et
+#: le même tick partait N fois vers les navigateurs (visible surtout en tests
+#: et sous `--reload`, qui recréent l'app plusieurs fois dans le processus).
+_wired: list[tuple[str, Any]] = []
+
 
 def wire_event_bus() -> None:
-    """Abonne le manager aux topics relayés. Appelé une fois par create_app()."""
+    """Abonne le manager aux topics relayés. Idempotent (cf. ``_wired``)."""
+    if _wired:
+        return
 
     def make_relay(topic: str):
         async def relay(payload: dict[str, Any]) -> None:
@@ -67,7 +75,16 @@ def wire_event_bus() -> None:
         return relay
 
     for topic in RELAYED_TOPICS:
-        event_bus.subscribe(topic, make_relay(topic))
+        handler = make_relay(topic)
+        event_bus.subscribe(topic, handler)
+        _wired.append((topic, handler))
+
+
+def unwire_event_bus() -> None:
+    """Retire les relais du bus. Appelé à l'arrêt de l'application."""
+    for topic, handler in _wired:
+        event_bus.unsubscribe(topic, handler)
+    _wired.clear()
 
 
 @router.websocket("/ws")

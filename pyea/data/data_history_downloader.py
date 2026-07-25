@@ -207,12 +207,23 @@ async def download_year(
         for day in days
         for side in _SIDES
     }
-    for (day, side), task in tasks.items():
-        payload = await task
-        if payload:
-            frame = decode_candles(payload, spec, day)
-            if not frame.empty:
-                sides_frames[side].append(frame)
+    # Une année = ~730 tâches lancées d'un coup. Si l'une échoue, la boucle
+    # sort en levant : SANS ce try/finally, les ~700 autres continuaient à
+    # tourner en arrière-plan (exception jamais récupérée, sémaphore squatté,
+    # bande passante volée à l'année suivante). On annule ce qui reste.
+    try:
+        for (day, side), task in tasks.items():
+            payload = await task
+            if payload:
+                frame = decode_candles(payload, spec, day)
+                if not frame.empty:
+                    sides_frames[side].append(frame)
+    finally:
+        pending = [task for task in tasks.values() if not task.done()]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
     if not sides_frames["BID"]:
         return pd.DataFrame()

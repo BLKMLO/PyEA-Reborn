@@ -38,3 +38,17 @@ def test_armement_et_arret_persistes(tmp_db: None) -> None:
 
     assert set_trading_enabled("EURUSD", False) is False
     assert is_trading_enabled("EURUSD") is False
+
+
+def test_cache_reflete_les_ecritures(tmp_db) -> None:
+    """Le cache mémoire ne doit jamais mentir sur ce qui est persisté.
+
+    `is_trading_enabled` est appelé sur CHAQUE tick (une centaine de fois par
+    seconde en live) : il lit un cache. Une écriture doit donc être visible
+    immédiatement, et la base rester la source de vérité."""
+    assert is_trading_enabled("EURUSD") is False  # défaut sûr
+    set_trading_enabled("EURUSD", True)
+    assert is_trading_enabled("EURUSD") is True
+    assert get_trading_states()["EURUSD"] is True
+    set_trading_enabled("EURUSD", False)
+    assert is_trading_enabled("EURUSD") is False

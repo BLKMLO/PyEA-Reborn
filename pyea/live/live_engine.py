@@ -14,25 +14,52 @@ Garde-fous d'honnêteté (le cœur de PyEA) : le moteur ne trade un symbole que
 si TROIS conditions sont réunies — le kill-switch global ``strategy.enabled``
 est ON, la paire est **armée** (bouton Trading du dashboard), et le broker est
 **connecté**. Il ne fabrique JAMAIS ni ordre ni fill : il s'arrête à
-``place_order`` (soumission) ; la journalisation du trade rempli viendra des
-callbacks d'exécution de la gateway (à câbler avec le routage d'ordres). Un
-broker dont le routage n'est pas encore câblé (``NotImplementedError``) est
+``place_order`` (soumission), et n'inscrit un trade au journal QUE sur un
+``ExecutionReport`` réellement rapporté par le broker (cf. ``on_execution``).
+Un broker dont le routage n'est pas encore câblé (``NotImplementedError``) est
 journalisé honnêtement, sans jamais inventer d'exécution.
+
+**Ordres en vol** : entre la soumission d'un ordre et l'apparition de la
+position chez le broker, il s'écoule des centaines de millisecondes — pendant
+lesquelles ``get_positions()`` ne montre encore RIEN. Un flux de prix rapide
+(MetaTrader scrute 4 fois par seconde) enverrait donc plusieurs ordres pour la
+même décision. Le moteur tient un registre des ordres en vol par symbole :
+tant qu'un ordre n'a pas reçu son compte rendu, aucun autre ordre n'est
+soumis sur ce symbole. Le registre se vide sur ``ExecutionReport`` ou, à
+défaut, après ``INFLIGHT_TIMEOUT_SECONDS`` (avec un avertissement : un broker
+muet ne doit pas geler la paire à jamais).
 """
 
 from __future__ import annotations
 
-from datetime import datetime
+import asyncio
+from datetime import date, datetime, timezone
 from typing import Any, Awaitable, Callable
 
 from pyea.brokers.broker_gateway import BrokerGateway
-from pyea.core.core_domain import Signal, SignalAction, TickData
+from pyea.core.core_domain import (
+    AccountState,
+    ExecutionReport,
+    ExecutionStatus,
+    OrderRequest,
+    Signal,
+    SignalAction,
+    TickData,
+)
 from pyea.core.core_events import TOPIC_SIGNAL, TOPIC_TICK, EventBus
 from pyea.core.core_logging import get_logger
 from pyea.risk.risk_manager import RiskManager
+from pyea.storage.storage_daily_equity import day_start_equity
+from pyea.storage.storage_trades import record_trade
 from pyea.strategies.strategy_base import Strategy
 
 logger = get_logger(__name__)
+
+#: Délai au-delà duquel un ordre sans compte rendu cesse de bloquer sa paire.
+#: Un broker qui ne rapporte pas ses exécutions (ou un compte rendu perdu) ne
+#: doit pas geler définitivement le symbole ; on préfère un avertissement
+#: explicite et la reprise du trading à un blocage silencieux.
+INFLIGHT_TIMEOUT_SECONDS = 60.0
 
 #: Fabrique une instance FRAÎCHE de stratégie par symbole (un modèle par
 #: actif — chaque paire a son propre état d'inférence).
@@ -64,6 +91,11 @@ class LiveTradingEngine:
         self._is_symbol_armed = is_symbol_armed
         self._strategies: dict[str, Strategy] = {}
         self._handler: Callable[[dict[str, Any]], Awaitable[None]] | None = None
+        # Ordres soumis dont le broker n'a pas encore rapporté le sort :
+        # symbole → (identifiant d'ordre, instant de soumission).
+        self._inflight: dict[str, tuple[str, datetime]] = {}
+        # Repère d'équité du jour (journée UTC, valeur persistée en base).
+        self._day_start: tuple[date, float] | None = None
 
     async def start(
         self, symbols: list[str], warmup_provider: WarmupProvider | None = None
@@ -98,6 +130,7 @@ class LiveTradingEngine:
             except Exception as exc:  # pragma: no cover - défensif
                 logger.warning("Arrêt de stratégie en échec : %s.", exc)
         self._strategies.clear()
+        self._inflight.clear()
 
     async def _on_tick_event(self, payload: dict[str, Any]) -> None:
         """Consommateur bus : reconstruit le tick et applique le flux strict."""
@@ -125,10 +158,18 @@ class LiveTradingEngine:
             return
         await self._publish_signal(signal)
 
+        # Un ordre est déjà en vol sur ce symbole : le broker ne l'a pas encore
+        # tranché, et `get_positions()` ne le montre donc pas. Soumettre ici
+        # DOUBLERAIT la décision. Le signal reste publié (visible au dashboard).
+        if self._has_inflight(tick.symbol):
+            return
+
         # Strategy → RiskManager → OrderRequest : aucun ordre ne contourne le
-        # risque, même en live. Les positions ouvertes viennent du broker réel.
+        # risque, même en live. Positions ET état de compte viennent du broker
+        # réel — c'est ce qui rend la limite de perte journalière applicable.
         open_positions = await gateway.get_positions()
-        order = await self._risk.evaluate(signal, open_positions)
+        account = await self._account_state(gateway)
+        order = await self._risk.evaluate(signal, open_positions, account)
         if order is None:
             return
 
@@ -143,9 +184,98 @@ class LiveTradingEngine:
                 order.side.value, order.symbol, order.quantity, gateway.name,
             )
             return
+        self._register_inflight(order, order_id)
         logger.info(
             "Ordre soumis au broker — %s %s x%s (id %s).",
             order.side.value, order.symbol, order.quantity, order_id,
+        )
+
+    # --- État de compte (limite de perte journalière) ----------------------
+    async def _account_state(self, gateway: BrokerGateway) -> AccountState | None:
+        """Équité réelle du compte + repère de début de journée UTC.
+
+        ``None`` si le broker ne rapporte pas d'équité : la limite de perte
+        journalière est alors inapplicable, et le RiskManager ne fait PAS
+        semblant de l'appliquer (cf. son docstring). Le repère du jour est lu
+        une seule fois par journée puis gardé en mémoire — il est persisté en
+        base, donc stable d'un redémarrage à l'autre.
+        """
+        try:
+            summary = await gateway.get_account_summary()
+        except Exception as exc:  # broker momentanément muet
+            logger.warning("Résumé de compte indisponible : %s.", exc)
+            return None
+        equity = summary.get("equity")
+        if not equity:
+            return None
+        today = datetime.now(timezone.utc).date()
+        if self._day_start is None or self._day_start[0] != today:
+            start = await asyncio.to_thread(day_start_equity, today, float(equity))
+            self._day_start = (today, start)
+        return AccountState(equity=float(equity), day_start_equity=self._day_start[1])
+
+    # --- Ordres en vol -----------------------------------------------------
+    def _has_inflight(self, symbol: str) -> bool:
+        """Un ordre est-il encore en attente de compte rendu sur ce symbole ?
+
+        Expire après ``INFLIGHT_TIMEOUT_SECONDS`` : un broker qui ne rapporte
+        pas ses exécutions ne doit pas geler la paire pour toujours.
+        """
+        entry = self._inflight.get(symbol)
+        if entry is None:
+            return False
+        order_id, submitted_at = entry
+        age = (datetime.now(timezone.utc) - submitted_at).total_seconds()
+        if age < INFLIGHT_TIMEOUT_SECONDS:
+            return True
+        del self._inflight[symbol]
+        logger.warning(
+            "Ordre %s (%s) sans compte rendu après %.0f s : le symbole est "
+            "débloqué. Vérifiez l'état de l'ordre chez le broker — PyEA ne "
+            "peut pas savoir s'il a été exécuté.",
+            order_id, symbol, age,
+        )
+        return False
+
+    def _register_inflight(self, order: OrderRequest, order_id: str) -> None:
+        self._inflight[order.symbol] = (order_id, datetime.now(timezone.utc))
+
+    # --- Comptes rendus d'exécution ----------------------------------------
+    async def on_execution(self, report: ExecutionReport) -> None:
+        """Reçoit ce que le broker a RÉELLEMENT fait de l'ordre.
+
+        Deux effets : libérer la réservation d'ordre en vol du symbole, et —
+        pour un ordre RÉELLEMENT rempli — inscrire le trade au journal SQL
+        (source unique du panneau Positions). Un ordre annulé ou refusé
+        libère la paire mais n'entre PAS au journal : PyEA n'y consigne que
+        des exécutions réelles.
+        """
+        entry = self._inflight.get(report.symbol)
+        if entry is not None and entry[0] == report.order_id:
+            del self._inflight[report.symbol]
+
+        if report.status != ExecutionStatus.FILLED:
+            logger.info(
+                "Ordre %s %s : %s (aucun trade journalisé).",
+                report.order_id, report.symbol, report.status.value,
+            )
+            return
+        # Écriture SQLite (bloquante) déportée : la boucle asyncio traite aussi
+        # le flux de prix, elle ne doit jamais attendre le disque.
+        await asyncio.to_thread(
+            record_trade,
+            broker_order_id=report.order_id,
+            symbol=report.symbol,
+            side=report.side.value,
+            quantity=report.quantity,
+            fill_price=report.fill_price,
+            status=ExecutionStatus.FILLED.value,
+            pnl=report.pnl,
+        )
+        logger.info(
+            "Trade exécuté journalisé — %s %s x%s @ %s (id %s).",
+            report.side.value, report.symbol, report.quantity,
+            report.fill_price, report.order_id,
         )
 
     async def _publish_signal(self, signal: Signal) -> None:

@@ -29,8 +29,10 @@ jamais commité — modèle dans `.env.example`).
 ## Règles d'architecture (non négociables)
 
 1. **Flux strict** : `MarketDataFeed → Strategy → Signal → RiskManager →
-   OrderRequest → BrokerGateway`. Aucune stratégie ne parle au broker ;
-   aucun ordre ne contourne le risk manager.
+   OrderRequest → BrokerGateway`, et **retour** par `ExecutionReport →
+   LiveTradingEngine → journal SQL`. Aucune stratégie ne parle au broker ;
+   aucun ordre ne contourne le risk manager ; aucun trade n'entre au
+   journal sans compte rendu réel du broker.
 2. **Câblage uniquement dans `pyea/app_factory.py:create_app()`** — les
    modules ne s'instancient pas entre eux.
 3. **Bus d'événements** (`pyea/core/core_events.py`) : producteurs
@@ -56,6 +58,16 @@ jamais commité — modèle dans `.env.example`).
   TradingView Lightweight Charts (chandeliers, pan/zoom, historique
   paginé) ; Chart.js réservé aux futurs graphiques classiques (P&L,
   distributions).
+- **Front : un seul scope global.** Les pages chargent des `<script>`
+  classiques, pas des modules ES. `static/js/ui.js` est le socle partagé
+  (formats, préférences localStorage, cartes de stats, tables triables, export
+  CSV, bandeau d'état, horloge UTC, raccourcis) : il est enfermé dans une
+  **IIFE** et n'expose que `window.PyEA` ; les scripts de page destructurent ce
+  qu'ils utilisent et ne redéfinissent jamais un helper du socle. Un `const` de
+  page homonyme d'une `function` du socle lève une `SyntaxError` qui empêche le
+  script de page de s'exécuter ENTIÈREMENT (page morte, pas dégradée) — et
+  `node --check` ne le voit pas. Toujours vérifier les 3 pages au navigateur,
+  console ouverte.
 - Libs front (Tailwind, HTMX, Lightweight Charts, Chart.js)
   **vendorisées** dans `pyea/web/static/vendor/` — jamais de CDN au
   runtime (le dashboard doit marcher sur un VPS sans internet sortant).
@@ -160,6 +172,17 @@ jamais commité — modèle dans `.env.example`).
   pas le live), résultats = cartes stats (bougies, trades, P&L, taux de
   gain, drawdown max **+ Sharpe / SQN / profit factor**), courbe d'équité
   (Chart.js) et table des trades.
+  **Coûts de transaction modélisés** : le spread est MESURÉ dans les données
+  (médiane de `ask_close - bid_close` ; le téléchargeur stocke les deux côtés
+  depuis toujours, le moteur ne lisait que le bid — un aller-retour était donc
+  GRATUIT) et facturé en coût fixe par côté, donc un aller-retour paie
+  exactement un spread ; + commission optionnelle `costs.commission_per_unit`.
+  Toutes les stats (P&L, profit factor, Sharpe, taux de gain) sont NETTES ;
+  `gross_pnl` et `total_costs` sont exposés à côté. Historique sans colonnes
+  ask → `costs_modelled: false` et l'UI affiche un bandeau ambre « résultat
+  OPTIMISTE » plutôt qu'un zéro trompeur. Approximation résiduelle assumée :
+  pour un SHORT, la sortie est un achat à l'ask, donc le départage d'un
+  franchissement quasi simultané peut différer (le coût total, lui, est exact).
   Moteur : `pyea/backtest/backtest_engine.py` — **adossé à backtrader**
   (moteur événementiel éprouvé, GPLv3, pur Python, **vendorisé dans
   `lib/backtrader/`**, zéro install). L'`BacktestEngine`/`BacktestResult`
@@ -184,11 +207,20 @@ jamais commité — modèle dans `.env.example`).
   page, Couleuvre n'a pas de modèle chargé (aucun entraînement dans un run
   de backtest simple) → 0 trade honnête ; pour la voir trader, passer par
   la page Entraînement (walk-forward).
-- `RiskManager.evaluate` **v1 implémentée** (plus un squelette) : HOLD
-  ignoré, EXIT → ordre inverse de la position ouverte, entrées à taille
-  fixe `risk.max_position_size` refusées au-delà de
-  `risk.max_open_positions`. À enrichir : perte journalière max,
-  kill-switch, sizing dynamique.
+- `RiskManager.evaluate` **v2** : HOLD ignoré, EXIT → ordre inverse de la
+  position ouverte (une sortie n'est JAMAIS bloquée par une limite), entrées
+  à taille fixe `risk.max_position_size` soumises à **trois** limites :
+  `risk.max_positions_per_symbol` (empilement sur une paire),
+  `risk.max_open_positions` (exposition totale du compte) et
+  `risk.max_daily_loss_pct` (**perte journalière max**, en % de l'équité de
+  début de journée UTC — repère persisté dans `storage_daily_equity.py`, donc
+  un redémarrage ne remet pas le compteur à zéro). ⚠ La perte journalière est
+  une garde **LIVE uniquement** : elle exige l'équité réelle du broker
+  (`AccountState`, fourni par le moteur live). Le backtest ne trade qu'une
+  unité nominale sur un capital synthétique, où un % d'équité n'a aucun sens
+  — il est donc sur ce seul point un peu OPTIMISTE par rapport au live,
+  assumé et documenté plutôt que simulé de travers. À enrichir : sizing
+  dynamique (volatilité, corrélations).
 - **Page Entraînement dédiée** (`/training`, `training.html` +
   `training.js`) : walk-forward à fenêtre expansive
   (`pyea/training/training_walkforward.py`, plis de test consécutifs,
@@ -220,7 +252,12 @@ jamais commité — modèle dans `.env.example`).
   brutes ; trades gagnants / total) — jamais une moyenne de ratios par pli
   (une moyenne non pondérée donnerait le même poids à un pli de 2 trades qu'à
   un pli de 200) ; Sharpe/SQN restent affichés **par pli** (pas d'agrégat
-  statistiquement douteux entre plis).
+  statistiquement douteux entre plis). **Chauffe OOS récupérée** : chaque bloc
+  de test reçoit `OOS_CONTEXT_BARS` (300) bougies de contexte prises à la fin
+  de son bloc d'entraînement — elles chauffent features et indicateurs
+  récursifs mais ne sont JAMAIS rejouées (aucune décision, aucun trade, aucune
+  statistique). Sans elles, les ~60 premières bougies de chaque pli donnaient
+  des features NaN, donc zéro trade possible.
 - **Spécification de Couleuvre v0.1** fournie par l'utilisateur :
   `docs/strategie_couleuvre.md` (swing intra-semaine 2-5 j, triple
   barrier ATR, features prix/tendance/momentum/vol/calendrier, **un modèle
@@ -249,7 +286,13 @@ jamais commité — modèle dans `.env.example`).
   fournit le frame → features/ATR/probas pré-calculés (exact et sans fuite,
   cf. stabilité par préfixe). `on_tick` : proba de la bougie → seuils
   (0.55/0.45) → ENTER_LONG/SHORT avec barrières TP/SL au même multiple
-  d'ATR que le labeling. **Un modèle par actif, entraîné manuellement**
+  d'ATR que le labeling. **Départage intrabar aligné sur le moteur** : quand
+  les deux barrières tombent dans la même bougie, le label retient la BASSE
+  (comme l'exécution, stop prioritaire) — auparavant il tranchait par le
+  close, plus optimiste, et apprenait au modèle des gains non délivrables.
+  **Fenêtre avant complète exigée** : une bougie dont l'horizon dépasse la fin
+  du frame reçoit NaN (avant, la queue de chaque pli était étiquetée sur une
+  fenêtre tronquée — un label faux que le `dropna` ne rattrapait pas). **Un modèle par actif, entraîné manuellement**
   (un symbole par run). **Comment tester une paire** : le walk-forward OOS
   de la page backtest EST le test ; la colonne **AUC IS** (in-sample)
   affichée en regard du taux de gain OOS par pli rend le surapprentissage
@@ -367,7 +410,19 @@ jamais commité — modèle dans `.env.example`).
   **Non bit-à-bit** et **1er run réel à valider chez l'utilisateur** : les ticks
   live sont un mid, pas l'OHLC bid/ask enregistré. **Plus de squelette côté
   live** : cycle de vie, compte, ordres, flux ET inférence ML sont câblés
-  (IB + MT5).
+  (IB + MT5) — cycle de vie, compte, ordres, flux de prix **et comptes rendus
+  d'exécution** (la boucle live est refermée dans les deux sens, cf. journal
+  du 2026-07-25).
+- **Compte affiché au dashboard** : `GET /api/account` sert le résumé réel du
+  broker (équité, solde, marge, marge libre) + la **perte du jour face au
+  plafond** `risk.max_daily_loss_pct` (ambre à la moitié, rouge une fois
+  atteinte). Déconnecté → tirets, jamais un chiffre inventé.
+- **Code mort supprimé (2026-07-25)** : `SignalRecord` (table `signals` jamais
+  écrite), les topics `TOPIC_LOG` / `TOPIC_EA_STATUS` (relayés au WebSocket
+  sans aucun producteur — un flux temps réel qui n'existait pas) et
+  `ib_account_id`. Seul `broker_credentials.py` reste **volontairement** sans
+  appelant (réserve pour un futur broker à identifiants ; son docstring le dit
+  désormais explicitement, il annonçait encore un câblage IB annulé).
 
 ## Points de vigilance (audit modularité 2026-07-18)
 
@@ -378,7 +433,9 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
 1. `event_bus` et `web_log_buffer` sont des singletons de module, pas
    injectés par `create_app()` (incohérent avec `MarketDataFeed` qui
    reçoit son bus). Si les tests exigent un jour des bus isolés, les
-   faire passer par `app_factory`.
+   faire passer par `app_factory`. **Atténué (2026-07-25)** : les relais
+   WebSocket sont désormais retirés du bus à l'arrêt de l'app
+   (`unwire_event_bus`), sinon chaque démarrage en empilait un jeu de plus.
 2. ~~`/api/status` code en dur `broker_connected: False`~~ **RÉSOLU
    (2026-07-20)** : gateway instanciée dans le `lifespan`, exposée par le
    singleton `broker_runtime` ; `/api/status` lit `is_connected()` réel.
@@ -392,6 +449,196 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
    sélection du modèle par actif) : le flux live est complet de bout en bout.
 
 ## Journal de décisions
+
+- **2026-07-25 (socle UI)** — **Refonte front partagée terminée** (le travail
+  avait été commencé par une session concurrente écrivant dans le même
+  répertoire, puis laissé à mi-chemin ; commit `4841563` l'a préservé tel quel,
+  celui-ci le finit — sur feu vert de l'utilisateur). **Le problème** : les
+  scripts de page sont des `<script>` CLASSIQUES et partagent donc un seul
+  scope lexical global. `ui.js` déclarait `const prefs`, `function num2`,
+  `function formatPrice`… au global, pendant que `charts.js` faisait
+  `const { prefs, formatPrice… } = window.PyEA` — collision `const`/`function`
+  → `SyntaxError` → le script de page ne s'exécutait PLUS DU TOUT. La page Live
+  était morte, la page Entraînement aussi. **Correctif** : (1) `ui.js` enfermé
+  dans une **IIFE**, n'exposant que `window.PyEA` ; (2) `training.js` et
+  `backtest.js` migrés au même motif de destructuration que `charts.js`, avec
+  suppression de leurs helpers dupliqués (`fillSelect`, `statCard`,
+  `apiErrorText`, `num2`, `pct1` — chacun existait en deux ou trois
+  exemplaires). Attention à la signature : le `statCard` du socle prend un
+  objet d'options (`{ colored: true }`), pas un booléen. (3) Câblé ce que le
+  socle ANNONÇAIT sans le faire : `loadHeaderStatus()` sur Backtest et
+  Entraînement (le bandeau mode/broker/stratégie est désormais sur les TROIS
+  pages — un broker qui tombe pendant un entraînement se voit sans revenir sur
+  Live) et `rememberForm` sur les deux formulaires (relancer un run en changeant
+  un seul paramètre ne demande plus de tout re-saisir). **Leçon consignée en
+  convention** : `node --check` ne détecte AUCUNE de ces collisions (il analyse
+  chaque fichier isolément) — seul un chargement navigateur les révèle, d'où la
+  règle « vérifier les 3 pages, console ouverte » après toute modif front.
+  **Restent sans appelant** dans le socle : `signed` et `formatDuration`
+  (utilitaires, pas du câblage trompeur — laissés en l'état et signalés).
+  Vérifié au navigateur : 3 pages OK, backtest et entraînement complets, zéro
+  erreur console. 172 tests Python toujours verts (aucun ne couvre le JS —
+  angle mort assumé).
+
+- **2026-07-25 (coûts)** — **Spread et commission modélisés dans le backtest**
+  (proposition d'amélioration retenue par l'utilisateur). **Le trou le plus
+  grave restant** : les colonnes `ask_*` étaient téléchargées et stockées
+  depuis le début, puis **jamais lues** — moteur, features et labeling
+  tournaient intégralement sur le bid. Un backtest achetait donc au bid et
+  revendait au bid : un aller-retour GRATUIT, qui n'existe pas. Aucune
+  commission non plus (`setcommission` jamais appelé). Décisions : (1) le
+  spread n'est PAS un réglage mais une MESURE (`measure_spread` = médiane de
+  `ask_close - bid_close` sur la période backtestée) — réaliste par paire et
+  par période, et impossible à « optimiser » ; **médiane** et non moyenne, le
+  spread explosant à l'ouverture et sur les annonces. (2) Coût facturé en
+  **COMM_FIXED par côté** (demi-spread × 2) plutôt qu'en décalant les prix :
+  les barrières restent remplies au prix EXACT, ce qui est correct puisque le
+  flux est en bid (un long sort au bid, un short entre au bid). Approximation
+  résiduelle documentée : la sortie d'un short est un achat à l'ask, donc son
+  départage intrabar peut différer d'un spread — le coût total, lui, est exact.
+  (3) **Honnêteté** : sans colonnes ask, aucun coût n'est inventé,
+  `costs_modelled: false`, et les deux pages affichent un bandeau ambre
+  « résultat OPTIMISTE ». (4) `trade.pnlcomm` (net) devient le P&L de
+  référence ; `gross_pnl` et `cost` sont conservés par trade pour le
+  diagnostic, et la reconstruction du prix de sortie continue d'utiliser le
+  BRUT (les coûts ne déplacent pas le prix touché). (5) Commission en config
+  (`costs.commission_per_unit`, par côté et par unité, en unités de prix), 0
+  par défaut = courtier « spread only ». **Mesuré** : sur l'historique
+  synthétique local, un spread de 1 pip mange ~11 % du P&L brut et fait passer
+  le profit factor de 3,37 à 2,88 ; et sur le jeu 2010-2026 sans edge, le
+  walk-forward passe d'un brut légèrement POSITIF (+0,019) à un net NÉGATIF
+  (−0,160) — profit factor 0,88. C'est exactement l'effet attendu : le spread
+  est ce qui sépare « ça a l'air de marcher » de « ça marche ». **6 tests
+  ajoutés, 172 verts** ; les deux pages vérifiées au navigateur. **Conséquences
+  traitées** : `config.yaml` (section `costs`), `config_settings`,
+  `api_backtest`/`api_training` (passent la commission), `run_walkforward`
+  (paramètre + `total_costs`/`costs_modelled` dans `oos_stats`),
+  `docs/architecture.md`, cartes « Coûts » sur les pages Backtest ET
+  Entraînement.
+
+- **2026-07-25 (suite)** — **Passe d'audit, points 9 à 20** (le reste de la
+  liste). (9) **Chauffe OOS récupérée** : `BacktestEngine.run` accepte un
+  `context` (bougies ANTÉRIEURES, chauffées mais jamais rejouées) ; le
+  walk-forward lui passe la fin du bloc d'entraînement. Mesuré sur historique
+  synthétique : +32 trades OOS (615 → 647) à taux de gain **inchangé**
+  (0,7577 → 0,7604) — la signature d'une chauffe récupérée, pas d'une fuite
+  (le contexte est du passé que le modèle a déjà vu à l'entraînement).
+  (10) **Fuite d'abonnements au bus** : `wire_event_bus()` s'exécutait à chaque
+  `create_app()` sans jamais se désabonner — chaque démarrage empilait 5 relais
+  de plus sur le singleton, et le même tick partait N fois aux navigateurs
+  (visible en tests et sous `--reload`). Wire idempotent + `unwire_event_bus()`
+  à l'arrêt. (11) **`is_trading_enabled` faisait un SELECT SQLite par TICK**
+  (~124/s avec 31 paires en MT5, bloquant dans la boucle asyncio) : cache
+  mémoire invalidé à chaque écriture et à `init_db()`, la base restant la
+  source de vérité. (12) **Téléchargeur** : ~730 tâches sont lancées par année ;
+  si l'une échouait, les ~700 autres continuaient en arrière-plan (exception
+  jamais lue, sémaphore squatté, bande passante volée à l'année suivante) —
+  `try/finally` qui annule le reste. (13) **Compte affiché** : `GET /api/account`
+  (équité/solde/marge/marge libre + perte du jour face au plafond) et panneau
+  dédié en bas à droite du dashboard — les deux gateways le fournissaient
+  depuis longtemps sans que rien ne l'affiche. (14) **Reconnexion WebSocket** :
+  nouveau helper partagé `static/js/websocket.js` (backoff 1 s → 30 s,
+  indicateur vert/ambre/rouge) utilisé par le dashboard ET la page
+  Entraînement ; un redémarrage serveur ne laisse plus la page muette jusqu'au
+  F5. (16) **Priorité de config documentée** : le YAML est passé en arguments
+  d'initialisation et **PRIME** sur `.env` (pydantic-settings) — le docstring
+  affirmait l'inverse. Une variable d'environnement n'a d'effet que si la clé
+  est ABSENTE de config.yaml ; noté aussi dans `.env.example`. (17) **Code mort
+  supprimé** : `SignalRecord`, `TOPIC_LOG`/`TOPIC_EA_STATUS` (relayés sans
+  producteur), `ib_account_id` ; `broker_credentials.py` conservé mais son
+  docstring corrigé (il annonçait encore un câblage IB annulé le 2026-07-20).
+  (18) **`_demo_quote`** rejouait ~4 300 tirages par symbole, soit ~134 000 par
+  appel de `/api/symbols` toutes les 10 s : marche mémorisée (`_demo_closes`,
+  LRU par minute de fin) — 1 210 ms → 0,2 ms en cache, **valeurs strictement
+  identiques** (vérifié contre l'implémentation d'origine). (20)
+  **`requirements.txt`** : `MetaTrader5` décommenté avec son marqueur
+  `sys_platform == "win32"` (pip l'installe sous Windows, l'ignore ailleurs) —
+  ce n'était pas une contrainte Python 3.13 mais une contrainte d'OS.
+  backtrader reste volontairement HORS pip (vendorisé dans `lib/`), avec une
+  note explicite pour qu'on ne l'ajoute pas par erreur. **Conséquences
+  traitées** : `docs/architecture.md` (arbo storage, note sur les topics sans
+  producteur, `/api/account`), `.env.example`, `dashboard.html` (panneau
+  compte), `base.html` (chargement de `websocket.js`). **16 tests ajoutés,
+  168 verts** ; dashboard vérifié au navigateur (panneau compte en tirets
+  broker déconnecté, zéro erreur console). **Points 15 et 19 étaient déjà
+  traités** dans le lot précédent (horodatages UTC, attribut privé du
+  RiskManager).
+
+- **2026-07-25** — **Passe d'audit du code** (demande utilisateur : « détecter
+  toutes les anomalies/améliorations possibles », puis correction dans l'ordre
+  de gravité). 20 points relevés ; les 8 premiers traités ici. **Bloquants pour
+  un premier run réel** : (1) **ordres dupliqués** — entre `place_order` et
+  l'apparition de la position chez le broker, `get_positions()` ne montre RIEN,
+  et MT5 scrute 4 fois/s : la même décision partait plusieurs fois. Registre des
+  **ordres en vol** par symbole dans `LiveTradingEngine` (un ordre non tranché
+  bloque son symbole ; le signal reste publié), libéré par le compte rendu
+  d'exécution ou, à défaut, après `INFLIGHT_TIMEOUT_SECONDS` (60 s) avec
+  avertissement — un broker muet ne doit pas geler la paire à jamais.
+  (2) **Aucun fill n'était journalisé** : `record_trade` n'était appelé de nulle
+  part, la table `trades` restait vide même en tradant réellement. Nouveau
+  **chemin retour** : type de domaine `ExecutionReport` + contrat
+  `BrokerGateway.set_execution_callback` (câblé par `LiveRuntime` au démarrage
+  du flux). IB pousse via `orderStatusEvent` (statuts TERMINAUX seulement,
+  dédoublonnés — TWS renotifie) ; MT5 n'ayant AUCUN callback d'exécution, on
+  relit `history_deals_get` toutes les 2 s (dédup par ticket, filtre `magic`
+  PyEA) — **seule façon d'apprendre qu'une position a été fermée par son
+  SL/TP**, qu'aucun retour d'`order_send` ne rapporte. Colonne `pnl` ajoutée au
+  journal (P&L calculé par le BROKER, sorties uniquement — sur une entrée MT5
+  renvoie 0, ce qui ne veut pas dire « trade nul » → None) ; la micro-migration
+  SQLite couvre l'ajout. `/api/positions` distingue désormais **latent** et
+  **réalisé**. (3) **Appels IPC bloquants dans des méthodes async (MT5)** :
+  seul `symbol_info_tick` était déporté ; `order_send`, `positions_get`,
+  `account_info`, `symbol_select`, `symbol_info`, `orders_get` gelaient la
+  boucle asyncio — donc le dashboard, le WebSocket et le flux de TOUS les
+  autres symboles pendant qu'un courtier lent traitait un ordre. Tous passent
+  par `_call` (exécuteur). `is_connected()` étant SYNCHRONE par contrat et
+  appelé à chaque tick, son sondage est mémorisé 2 s — jamais en avance : une
+  déconnexion demandée est appliquée immédiatement. (4) **Bus d'événements** :
+  `asyncio.gather` sans `return_exceptions` propageait l'erreur d'un abonné
+  jusqu'au PRODUCTEUR, c'est-à-dire la tâche de scrutation MT5 / le callback IB
+  — une erreur de stratégie tuait donc le flux de prix du symbole, en silence
+  (tâche de fond, exception jamais lue). Abonnés isolés et journalisés ;
+  `CancelledError` reste propagée (c'est un ordre d'arrêt, pas une erreur) ;
+  `unsubscribe` devient idempotent. **Anomalies de fond** : (5) **perte
+  journalière max implémentée** (elle était lue dans la config et jamais
+  appliquée — le pire des faux amis sur un logiciel de trading) : `AccountState`
+  (équité broker + repère de début de journée UTC **persisté** dans la nouvelle
+  table `daily_equity`, sinon un redémarrage en séance laisserait reperdre le
+  plafond) ; au-delà du seuil, plus aucune ENTRÉE — les sorties restent
+  toujours autorisées. Garde LIVE assumée, non modélisée en backtest (capital
+  nominal synthétique). (6) **`max_open_positions` était un plafond GLOBAL** :
+  avec le défaut 1 et 31 paires abonnées, une seule position gelait 30 paires.
+  Séparé en `max_positions_per_symbol` (empilement) + `max_open_positions`
+  (exposition totale). (7) **Départage intrabar du labeling aligné sur le
+  moteur** (barrière basse prioritaire, cf. section Couleuvre). (8) **Labels de
+  queue supprimés** quand la fenêtre avant est incomplète.
+  **Découvertes en cours de route** (non repérées à la lecture initiale) :
+  (a) `TickData` était **utilisé sans être importé** dans la gateway IB → le
+  flux de prix aurait levé un `NameError` au premier tick reçu ; (b) les
+  coroutines planifiées depuis les callbacks SYNCHRONES d'ib_async n'étaient pas
+  retenues (`ensure_future` ne crée qu'une référence faible) → le GC pouvait
+  annuler un tick ou un compte rendu en plein vol ; (c) **le plus grave** :
+  `frame.index.asi8` renvoie des entiers dans l'UNITÉ de l'index, et
+  **pandas 3 crée des index en microsecondes** — la constante `_NS_PER_DAY`
+  rendait l'horizon triple-barrier **1000× trop long**, donc la barrière
+  verticale de 5 jours ne se déclenchait JAMAIS et le scan cherchait une
+  barrière sur tout l'historique restant. Corrigé par `_horizon_ticks()`, qui
+  dérive l'horizon de `index.unit` (attention : `Timedelta.as_unit(u).value`
+  reste en nanosecondes — il faut passer par numpy). Bug invisible sous
+  pandas 2.x (ns), actif sous pandas 3.x. (d) horodatages SQLite sérialisés
+  sans fuseau, relus en heure LOCALE par le navigateur. **Conséquences
+  traitées** : `config.yaml` (nouvelle clé + commentaires sur les deux
+  plafonds et la portée live-only de la perte journalière),
+  `docs/architecture.md` (chemin retour, isolation du bus, arbo risk/ et
+  storage_daily_equity), `BacktestEngine` n'accède plus à l'attribut privé
+  `_max_position_size` (propriété publique). **23 tests ajoutés, 152 verts** ;
+  walk-forward validé de bout en bout sur historique synthétique (le labeling
+  produit désormais un vrai mélange tp/sl, queue en NaN). **Reste des points
+  d'audit non traités** : affichage de l'équité/marge au dashboard,
+  reconnexion WebSocket, priorité YAML > .env mal documentée, code mort
+  (`SignalRecord`, `TOPIC_LOG`/`TOPIC_EA_STATUS`, `broker_credentials`,
+  `ib_account_id`), coût CPU de `_demo_quote`, chauffe perdue à chaque pli OOS,
+  annulation des tâches de téléchargement restantes après échec.
 
 - **2026-07-21** — **Câblage live, étape 5 : inférence live de Couleuvre**
   (demande utilisateur « go pour l'inférence live »). Dernière brique du flux

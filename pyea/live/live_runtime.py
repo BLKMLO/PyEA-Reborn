@@ -164,6 +164,9 @@ class LiveRuntime:
 
         gateway = broker_runtime.gateway
         assert gateway is not None  # garanti par _connected_gateway ci-dessus
+        # Boucle refermée : ce que le broker fait des ordres revient au moteur
+        # (libération des ordres en vol + journalisation des trades réels).
+        gateway.set_execution_callback(self._engine.on_execution)
         self._feed = MarketDataFeed(gateway, self._bus)
         try:
             await self._feed.start(symbols)
@@ -178,6 +181,9 @@ class LiveRuntime:
         """Arrête proprement feed + moteur (idempotent)."""
         if not self._running:
             return
+        gateway = broker_runtime.gateway
+        if gateway is not None:
+            gateway.set_execution_callback(None)
         if self._feed is not None:
             await self._feed.stop()
             self._feed = None

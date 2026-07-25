@@ -103,6 +103,7 @@ async def start_training(request: TrainingRunRequest) -> dict[str, Any]:
                 artifacts_dir=artifacts_dir,
                 progress=progress,
                 cancelled=cancelled,
+                commission_per_unit=settings.costs_commission_per_unit,
             )
         except Exception:
             finish_run(run_id, "failed")

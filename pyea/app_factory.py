@@ -54,6 +54,10 @@ async def lifespan(app: FastAPI):
     yield
     await live_runtime.stop()
     await broker_runtime.disconnect()
+    # Le bus est un singleton de module : on retire nos relais, sinon chaque
+    # démarrage d'application en empilerait un jeu de plus (le même tick
+    # diffusé N fois).
+    api_websocket.unwire_event_bus()
     logger.info("PyEA arrêté.")
 
 
