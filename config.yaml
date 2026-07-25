@@ -33,7 +33,21 @@ ui:
 
 risk:
   max_position_size: 1
+  # Perte journalière maximale, en % de l'équité de DÉBUT DE JOURNÉE UTC
+  # (repère persisté : un redémarrage ne remet pas le compteur à zéro).
+  # Au-delà, plus aucune ENTRÉE n'est autorisée ; les sorties le restent
+  # toujours. 0 = limite désactivée.
+  # ⚠ Garde LIVE uniquement : elle a besoin de l'équité réelle du broker. Le
+  # backtest ne trade qu'une unité nominale sur un capital synthétique, où un
+  # pourcentage d'équité n'aurait aucun sens — il est donc, sur ce seul point,
+  # un peu optimiste par rapport au live.
   max_daily_loss_pct: 2.0
+  # Deux plafonds DISTINCTS. Par symbole : empêche d'empiler des entrées sur
+  # la même paire. Sur le compte : borne l'exposition totale — attention, un
+  # 1 ici signifie qu'UNE position ouverte bloque toutes les autres paires
+  # armées (mettre le nombre de paires que vous acceptez de tenir en même
+  # temps).
+  max_positions_per_symbol: 1
   max_open_positions: 1
 
 history:

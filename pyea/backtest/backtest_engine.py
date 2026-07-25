@@ -230,7 +230,7 @@ class BacktestEngine:
     def __init__(self, strategy: Strategy, risk_manager: RiskManager) -> None:
         self._strategy = strategy
         self._risk = risk_manager
-        self._size = float(risk_manager._max_position_size)  # échelle du P&L
+        self._size = float(risk_manager.max_position_size)  # échelle du P&L
 
     def run(self, symbol: str, frame: pd.DataFrame, timeframe: str) -> BacktestResult:
         """Exécute le backtest (synchrone : backtrader l'est ; les méthodes

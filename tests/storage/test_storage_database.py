@@ -60,3 +60,22 @@ def test_profit_factor_persiste_dans_l_historique(tmp_db: Path) -> None:
     )
     run = next(r for r in list_runs() if r["id"] == "run-1")
     assert run["oos_profit_factor"] == 1.42
+
+
+def test_repere_d_equite_du_jour_est_stable(tmp_db: Path) -> None:
+    """Le repère d'équité de début de journée est posé UNE fois, puis relu.
+
+    C'est ce qui empêche un redémarrage en milieu de séance de remettre le
+    compteur de perte journalière à zéro — et donc de laisser reperdre le
+    plafond une seconde fois dans la même journée."""
+    from datetime import date
+
+    from pyea.storage.storage_daily_equity import day_start_equity
+
+    init_db()
+    jour = date(2026, 7, 25)
+    assert day_start_equity(jour, 10_000.0) == 10_000.0
+    # L'équité a fondu en cours de séance : le repère, lui, ne bouge pas.
+    assert day_start_equity(jour, 9_000.0) == 10_000.0
+    # Nouvelle journée UTC = nouveau repère.
+    assert day_start_equity(date(2026, 7, 26), 9_000.0) == 9_000.0

@@ -29,8 +29,10 @@ jamais commité — modèle dans `.env.example`).
 ## Règles d'architecture (non négociables)
 
 1. **Flux strict** : `MarketDataFeed → Strategy → Signal → RiskManager →
-   OrderRequest → BrokerGateway`. Aucune stratégie ne parle au broker ;
-   aucun ordre ne contourne le risk manager.
+   OrderRequest → BrokerGateway`, et **retour** par `ExecutionReport →
+   LiveTradingEngine → journal SQL`. Aucune stratégie ne parle au broker ;
+   aucun ordre ne contourne le risk manager ; aucun trade n'entre au
+   journal sans compte rendu réel du broker.
 2. **Câblage uniquement dans `pyea/app_factory.py:create_app()`** — les
    modules ne s'instancient pas entre eux.
 3. **Bus d'événements** (`pyea/core/core_events.py`) : producteurs
@@ -184,11 +186,20 @@ jamais commité — modèle dans `.env.example`).
   page, Couleuvre n'a pas de modèle chargé (aucun entraînement dans un run
   de backtest simple) → 0 trade honnête ; pour la voir trader, passer par
   la page Entraînement (walk-forward).
-- `RiskManager.evaluate` **v1 implémentée** (plus un squelette) : HOLD
-  ignoré, EXIT → ordre inverse de la position ouverte, entrées à taille
-  fixe `risk.max_position_size` refusées au-delà de
-  `risk.max_open_positions`. À enrichir : perte journalière max,
-  kill-switch, sizing dynamique.
+- `RiskManager.evaluate` **v2** : HOLD ignoré, EXIT → ordre inverse de la
+  position ouverte (une sortie n'est JAMAIS bloquée par une limite), entrées
+  à taille fixe `risk.max_position_size` soumises à **trois** limites :
+  `risk.max_positions_per_symbol` (empilement sur une paire),
+  `risk.max_open_positions` (exposition totale du compte) et
+  `risk.max_daily_loss_pct` (**perte journalière max**, en % de l'équité de
+  début de journée UTC — repère persisté dans `storage_daily_equity.py`, donc
+  un redémarrage ne remet pas le compteur à zéro). ⚠ La perte journalière est
+  une garde **LIVE uniquement** : elle exige l'équité réelle du broker
+  (`AccountState`, fourni par le moteur live). Le backtest ne trade qu'une
+  unité nominale sur un capital synthétique, où un % d'équité n'a aucun sens
+  — il est donc sur ce seul point un peu OPTIMISTE par rapport au live,
+  assumé et documenté plutôt que simulé de travers. À enrichir : sizing
+  dynamique (volatilité, corrélations).
 - **Page Entraînement dédiée** (`/training`, `training.html` +
   `training.js`) : walk-forward à fenêtre expansive
   (`pyea/training/training_walkforward.py`, plis de test consécutifs,
@@ -249,7 +260,13 @@ jamais commité — modèle dans `.env.example`).
   fournit le frame → features/ATR/probas pré-calculés (exact et sans fuite,
   cf. stabilité par préfixe). `on_tick` : proba de la bougie → seuils
   (0.55/0.45) → ENTER_LONG/SHORT avec barrières TP/SL au même multiple
-  d'ATR que le labeling. **Un modèle par actif, entraîné manuellement**
+  d'ATR que le labeling. **Départage intrabar aligné sur le moteur** : quand
+  les deux barrières tombent dans la même bougie, le label retient la BASSE
+  (comme l'exécution, stop prioritaire) — auparavant il tranchait par le
+  close, plus optimiste, et apprenait au modèle des gains non délivrables.
+  **Fenêtre avant complète exigée** : une bougie dont l'horizon dépasse la fin
+  du frame reçoit NaN (avant, la queue de chaque pli était étiquetée sur une
+  fenêtre tronquée — un label faux que le `dropna` ne rattrapait pas). **Un modèle par actif, entraîné manuellement**
   (un symbole par run). **Comment tester une paire** : le walk-forward OOS
   de la page backtest EST le test ; la colonne **AUC IS** (in-sample)
   affichée en regard du taux de gain OOS par pli rend le surapprentissage
@@ -367,7 +384,15 @@ jamais commité — modèle dans `.env.example`).
   **Non bit-à-bit** et **1er run réel à valider chez l'utilisateur** : les ticks
   live sont un mid, pas l'OHLC bid/ask enregistré. **Plus de squelette côté
   live** : cycle de vie, compte, ordres, flux ET inférence ML sont câblés
-  (IB + MT5).
+  (IB + MT5) — cycle de vie, compte, ordres, flux de prix **et comptes rendus
+  d'exécution** (la boucle live est refermée dans les deux sens, cf. journal
+  du 2026-07-25).
+- **Non consommé pour l'instant** : `get_account_summary()` est implémenté par
+  les deux gateways et sert au RiskManager (perte journalière), mais l'équité /
+  la marge ne sont pas encore AFFICHÉES au dashboard (point relevé à l'audit,
+  pas encore traité). `SignalRecord` (table `signals`), `TOPIC_LOG` et
+  `TOPIC_EA_STATUS` restent du câblage mort ; `broker_credentials.py` est
+  conservé sans appelant (aucun broker supporté n'utilise de login/mdp).
 
 ## Points de vigilance (audit modularité 2026-07-18)
 
@@ -392,6 +417,82 @@ dépendances uniquement vers `core`/`config`, lecture env/YAML confinée à
    sélection du modèle par actif) : le flux live est complet de bout en bout.
 
 ## Journal de décisions
+
+- **2026-07-25** — **Passe d'audit du code** (demande utilisateur : « détecter
+  toutes les anomalies/améliorations possibles », puis correction dans l'ordre
+  de gravité). 20 points relevés ; les 8 premiers traités ici. **Bloquants pour
+  un premier run réel** : (1) **ordres dupliqués** — entre `place_order` et
+  l'apparition de la position chez le broker, `get_positions()` ne montre RIEN,
+  et MT5 scrute 4 fois/s : la même décision partait plusieurs fois. Registre des
+  **ordres en vol** par symbole dans `LiveTradingEngine` (un ordre non tranché
+  bloque son symbole ; le signal reste publié), libéré par le compte rendu
+  d'exécution ou, à défaut, après `INFLIGHT_TIMEOUT_SECONDS` (60 s) avec
+  avertissement — un broker muet ne doit pas geler la paire à jamais.
+  (2) **Aucun fill n'était journalisé** : `record_trade` n'était appelé de nulle
+  part, la table `trades` restait vide même en tradant réellement. Nouveau
+  **chemin retour** : type de domaine `ExecutionReport` + contrat
+  `BrokerGateway.set_execution_callback` (câblé par `LiveRuntime` au démarrage
+  du flux). IB pousse via `orderStatusEvent` (statuts TERMINAUX seulement,
+  dédoublonnés — TWS renotifie) ; MT5 n'ayant AUCUN callback d'exécution, on
+  relit `history_deals_get` toutes les 2 s (dédup par ticket, filtre `magic`
+  PyEA) — **seule façon d'apprendre qu'une position a été fermée par son
+  SL/TP**, qu'aucun retour d'`order_send` ne rapporte. Colonne `pnl` ajoutée au
+  journal (P&L calculé par le BROKER, sorties uniquement — sur une entrée MT5
+  renvoie 0, ce qui ne veut pas dire « trade nul » → None) ; la micro-migration
+  SQLite couvre l'ajout. `/api/positions` distingue désormais **latent** et
+  **réalisé**. (3) **Appels IPC bloquants dans des méthodes async (MT5)** :
+  seul `symbol_info_tick` était déporté ; `order_send`, `positions_get`,
+  `account_info`, `symbol_select`, `symbol_info`, `orders_get` gelaient la
+  boucle asyncio — donc le dashboard, le WebSocket et le flux de TOUS les
+  autres symboles pendant qu'un courtier lent traitait un ordre. Tous passent
+  par `_call` (exécuteur). `is_connected()` étant SYNCHRONE par contrat et
+  appelé à chaque tick, son sondage est mémorisé 2 s — jamais en avance : une
+  déconnexion demandée est appliquée immédiatement. (4) **Bus d'événements** :
+  `asyncio.gather` sans `return_exceptions` propageait l'erreur d'un abonné
+  jusqu'au PRODUCTEUR, c'est-à-dire la tâche de scrutation MT5 / le callback IB
+  — une erreur de stratégie tuait donc le flux de prix du symbole, en silence
+  (tâche de fond, exception jamais lue). Abonnés isolés et journalisés ;
+  `CancelledError` reste propagée (c'est un ordre d'arrêt, pas une erreur) ;
+  `unsubscribe` devient idempotent. **Anomalies de fond** : (5) **perte
+  journalière max implémentée** (elle était lue dans la config et jamais
+  appliquée — le pire des faux amis sur un logiciel de trading) : `AccountState`
+  (équité broker + repère de début de journée UTC **persisté** dans la nouvelle
+  table `daily_equity`, sinon un redémarrage en séance laisserait reperdre le
+  plafond) ; au-delà du seuil, plus aucune ENTRÉE — les sorties restent
+  toujours autorisées. Garde LIVE assumée, non modélisée en backtest (capital
+  nominal synthétique). (6) **`max_open_positions` était un plafond GLOBAL** :
+  avec le défaut 1 et 31 paires abonnées, une seule position gelait 30 paires.
+  Séparé en `max_positions_per_symbol` (empilement) + `max_open_positions`
+  (exposition totale). (7) **Départage intrabar du labeling aligné sur le
+  moteur** (barrière basse prioritaire, cf. section Couleuvre). (8) **Labels de
+  queue supprimés** quand la fenêtre avant est incomplète.
+  **Découvertes en cours de route** (non repérées à la lecture initiale) :
+  (a) `TickData` était **utilisé sans être importé** dans la gateway IB → le
+  flux de prix aurait levé un `NameError` au premier tick reçu ; (b) les
+  coroutines planifiées depuis les callbacks SYNCHRONES d'ib_async n'étaient pas
+  retenues (`ensure_future` ne crée qu'une référence faible) → le GC pouvait
+  annuler un tick ou un compte rendu en plein vol ; (c) **le plus grave** :
+  `frame.index.asi8` renvoie des entiers dans l'UNITÉ de l'index, et
+  **pandas 3 crée des index en microsecondes** — la constante `_NS_PER_DAY`
+  rendait l'horizon triple-barrier **1000× trop long**, donc la barrière
+  verticale de 5 jours ne se déclenchait JAMAIS et le scan cherchait une
+  barrière sur tout l'historique restant. Corrigé par `_horizon_ticks()`, qui
+  dérive l'horizon de `index.unit` (attention : `Timedelta.as_unit(u).value`
+  reste en nanosecondes — il faut passer par numpy). Bug invisible sous
+  pandas 2.x (ns), actif sous pandas 3.x. (d) horodatages SQLite sérialisés
+  sans fuseau, relus en heure LOCALE par le navigateur. **Conséquences
+  traitées** : `config.yaml` (nouvelle clé + commentaires sur les deux
+  plafonds et la portée live-only de la perte journalière),
+  `docs/architecture.md` (chemin retour, isolation du bus, arbo risk/ et
+  storage_daily_equity), `BacktestEngine` n'accède plus à l'attribut privé
+  `_max_position_size` (propriété publique). **23 tests ajoutés, 152 verts** ;
+  walk-forward validé de bout en bout sur historique synthétique (le labeling
+  produit désormais un vrai mélange tp/sl, queue en NaN). **Reste des points
+  d'audit non traités** : affichage de l'équité/marge au dashboard,
+  reconnexion WebSocket, priorité YAML > .env mal documentée, code mort
+  (`SignalRecord`, `TOPIC_LOG`/`TOPIC_EA_STATUS`, `broker_credentials`,
+  `ib_account_id`), coût CPU de `_demo_quote`, chauffe perdue à chaque pli OOS,
+  annulation des tâches de téléchargement restantes après échec.
 
 - **2026-07-21** — **Câblage live, étape 5 : inférence live de Couleuvre**
   (demande utilisateur « go pour l'inférence live »). Dernière brique du flux

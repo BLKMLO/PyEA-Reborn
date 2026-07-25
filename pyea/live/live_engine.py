@@ -33,11 +33,12 @@ muet ne doit pas geler la paire à jamais).
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Awaitable, Callable
 
 from pyea.brokers.broker_gateway import BrokerGateway
 from pyea.core.core_domain import (
+    AccountState,
     ExecutionReport,
     ExecutionStatus,
     OrderRequest,
@@ -48,6 +49,7 @@ from pyea.core.core_domain import (
 from pyea.core.core_events import TOPIC_SIGNAL, TOPIC_TICK, EventBus
 from pyea.core.core_logging import get_logger
 from pyea.risk.risk_manager import RiskManager
+from pyea.storage.storage_daily_equity import day_start_equity
 from pyea.storage.storage_trades import record_trade
 from pyea.strategies.strategy_base import Strategy
 
@@ -92,6 +94,8 @@ class LiveTradingEngine:
         # Ordres soumis dont le broker n'a pas encore rapporté le sort :
         # symbole → (identifiant d'ordre, instant de soumission).
         self._inflight: dict[str, tuple[str, datetime]] = {}
+        # Repère d'équité du jour (journée UTC, valeur persistée en base).
+        self._day_start: tuple[date, float] | None = None
 
     async def start(
         self, symbols: list[str], warmup_provider: WarmupProvider | None = None
@@ -161,9 +165,11 @@ class LiveTradingEngine:
             return
 
         # Strategy → RiskManager → OrderRequest : aucun ordre ne contourne le
-        # risque, même en live. Les positions ouvertes viennent du broker réel.
+        # risque, même en live. Positions ET état de compte viennent du broker
+        # réel — c'est ce qui rend la limite de perte journalière applicable.
         open_positions = await gateway.get_positions()
-        order = await self._risk.evaluate(signal, open_positions)
+        account = await self._account_state(gateway)
+        order = await self._risk.evaluate(signal, open_positions, account)
         if order is None:
             return
 
@@ -183,6 +189,30 @@ class LiveTradingEngine:
             "Ordre soumis au broker — %s %s x%s (id %s).",
             order.side.value, order.symbol, order.quantity, order_id,
         )
+
+    # --- État de compte (limite de perte journalière) ----------------------
+    async def _account_state(self, gateway: BrokerGateway) -> AccountState | None:
+        """Équité réelle du compte + repère de début de journée UTC.
+
+        ``None`` si le broker ne rapporte pas d'équité : la limite de perte
+        journalière est alors inapplicable, et le RiskManager ne fait PAS
+        semblant de l'appliquer (cf. son docstring). Le repère du jour est lu
+        une seule fois par journée puis gardé en mémoire — il est persisté en
+        base, donc stable d'un redémarrage à l'autre.
+        """
+        try:
+            summary = await gateway.get_account_summary()
+        except Exception as exc:  # broker momentanément muet
+            logger.warning("Résumé de compte indisponible : %s.", exc)
+            return None
+        equity = summary.get("equity")
+        if not equity:
+            return None
+        today = datetime.now(timezone.utc).date()
+        if self._day_start is None or self._day_start[0] != today:
+            start = await asyncio.to_thread(day_start_equity, today, float(equity))
+            self._day_start = (today, start)
+        return AccountState(equity=float(equity), day_start_equity=self._day_start[1])
 
     # --- Ordres en vol -----------------------------------------------------
     def _has_inflight(self, symbol: str) -> bool:

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String
+from sqlalchemy import Boolean, Date, DateTime, Float, Integer, String
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -28,6 +28,19 @@ class SymbolTradingState(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
     )
+
+
+class DailyEquity(Base):
+    """Équité de référence d'une journée UTC (limite de perte journalière).
+
+    Persistée pour qu'un redémarrage du serveur ne remette pas le compteur
+    de perte à zéro en milieu de séance.
+    """
+
+    __tablename__ = "daily_equity"
+
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    start_equity: Mapped[float] = mapped_column(Float)
 
 
 class TrainingRun(Base):

@@ -49,8 +49,10 @@ PyEA-Reborn/
 │   │   └── strategy_couleuvre_v0_1.py     # Couleuvre_v0.1 : train (LightGBM) / warmup / on_tick.
 │   │
 │   ├── risk/
-│   │   └── risk_manager.py                # Seul module qui transforme un Signal en OrderRequest
-│   │                                      # (v1 : taille fixe + plafond de positions).
+│   │   └── risk_manager.py                # Seul module qui transforme un Signal en OrderRequest :
+│   │                                      # taille fixe, plafonds de positions (par symbole ET
+│   │                                      # sur le compte), perte journalière max (garde LIVE,
+│   │                                      # non modélisée en backtest — cf. son docstring).
 │   │
 │   ├── backtest/
 │   │   └── backtest_engine.py             # Rejoue l'historique via le flux complet
@@ -74,6 +76,8 @@ PyEA-Reborn/
 │   │   ├── storage_database.py            # Moteur/sessions ; SQLite → Postgres via database_url.
 │   │   ├── storage_trading_state.py       # Interrupteur Trading/Stopped par symbole (persisté).
 │   │   ├── storage_trades.py              # Journal SQL des trades exécutés (affichage réel, jamais simulé).
+│   │   ├── storage_daily_equity.py        # Équité de référence du jour (limite de perte journalière),
+│   │   │                                  # persistée : un redémarrage ne remet pas le compteur à zéro.
 │   │   └── storage_training_runs.py       # Historique des entraînements (métriques OOS, artefacts).
 │   │
 │   ├── api/

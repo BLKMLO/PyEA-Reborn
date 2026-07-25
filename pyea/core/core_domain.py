@@ -90,6 +90,27 @@ class Position:
     unrealized_pnl: float | None = None
 
 
+@dataclass(frozen=True)
+class AccountState:
+    """État du compte chez le broker, à l'instant d'une décision de risque.
+
+    ``equity`` vient du broker (jamais estimée par PyEA) ;
+    ``day_start_equity`` est le repère persisté du début de journée UTC
+    (cf. ``storage_daily_equity``). Ensemble, ils donnent la perte du jour —
+    la seule mesure honnête pour la limite ``max_daily_loss_pct``.
+    """
+
+    equity: float
+    day_start_equity: float
+
+    @property
+    def day_loss_pct(self) -> float | None:
+        """Perte du jour en % (positive = perte). ``None`` si non calculable."""
+        if not self.day_start_equity:
+            return None
+        return (self.day_start_equity - self.equity) / self.day_start_equity * 100.0
+
+
 class ExecutionStatus(str, Enum):
     """Sort d'un ordre, tel que RAPPORTÉ par le broker (jamais déduit).
 

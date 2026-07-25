@@ -58,7 +58,14 @@ class Settings(BaseSettings):
     strategy_enabled: bool = False
     ui_chart_refresh_seconds: int = Field(default=5, ge=1)
     risk_max_position_size: float = Field(default=1, gt=0)
+    # Perte journalière max, en % de l'équité de début de journée UTC.
+    # Garde LIVE (exige l'équité réelle du broker) ; 0 = désactivée. Le
+    # backtest ne la modélise pas (capital nominal synthétique) — cf.
+    # risk_manager.py.
     risk_max_daily_loss_pct: float = Field(default=2.0, ge=0)
+    # Deux plafonds DISTINCTS : par symbole (empilement d'entrées sur la même
+    # paire) et sur le compte (exposition totale).
+    risk_max_positions_per_symbol: int = Field(default=1, ge=1)
     risk_max_open_positions: int = Field(default=1, ge=1)
     history_data_dir: str = "./data/history"
     history_start_year: int = Field(default=2010, ge=1990, le=2100)
@@ -114,6 +121,7 @@ def _yaml_overrides(raw: dict[str, Any]) -> dict[str, Any]:
         "ui_chart_refresh_seconds": ui.get("chart_refresh_seconds"),
         "risk_max_position_size": risk.get("max_position_size"),
         "risk_max_daily_loss_pct": risk.get("max_daily_loss_pct"),
+        "risk_max_positions_per_symbol": risk.get("max_positions_per_symbol"),
         "risk_max_open_positions": risk.get("max_open_positions"),
         "history_data_dir": history.get("data_dir"),
         "history_start_year": history.get("start_year"),

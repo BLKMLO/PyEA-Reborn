@@ -13,9 +13,20 @@ touchée avant la basse (événement « long gagnant » = « short perdant »),
 élevée → long, faible → short. Si l'horizon expire sans toucher de
 barrière, on étiquette par le signe du retour sur l'horizon.
 
+**Départage quand les DEUX barrières tombent dans la même bougie** : on
+retient la BASSE (label 0). C'est exactement la convention du moteur
+d'exécution, qui suppose le stop touché d'abord faute de connaître l'ordre
+intrabar réel. Entraîner sur une règle plus optimiste (départage par le
+close, comme avant) apprenait au modèle des gains que l'exécution ne
+délivre jamais — la cible doit décrire ce que PyEA obtiendra vraiment.
+
 ⚠ Le label REGARDE VERS L'AVENIR — c'est sa nature (c'est la cible). Il
-n'est défini que pour les bougies disposant d'une fenêtre avant complète ;
-les features, elles, restent strictement causales (cf.
+n'est défini que pour les bougies disposant d'une fenêtre avant COMPLÈTE :
+une bougie dont l'horizon dépasse la fin du frame reçoit ``NaN``, jamais un
+label calculé sur une fenêtre tronquée (les dernières bougies auraient sinon
+été étiquetées sur quelques minutes au lieu de plusieurs jours — un label
+faux, que le ``dropna`` de l'entraînement ne pouvait pas rattraper). Les
+features, elles, restent strictement causales (cf.
 ``strategy_couleuvre_features``). L'alignement features(t) ↔ label(t) sans
 fuite se fait côté ``train`` (les deux partagent l'index, on ``dropna``).
 
@@ -37,7 +48,23 @@ BARRIER_ATR_MULT = 1.5
 #: Barrière verticale (horizon max de maintien), en jours calendaires.
 MAX_HOLD_DAYS = 5
 
-_NS_PER_DAY = 86_400 * 1_000_000_000
+
+def _horizon_ticks(index: pd.DatetimeIndex, max_hold_days: int) -> int:
+    """Horizon exprimé dans l'UNITÉ de l'index (ns, µs, ms…).
+
+    ``DatetimeIndex.asi8`` renvoie des entiers dans la résolution de l'index,
+    qui n'est pas toujours la nanoseconde : pandas 3 crée des index en
+    **microsecondes** par défaut. Une constante « nanosecondes par jour »
+    codée en dur rendait donc l'horizon 1000× trop long — la barrière
+    verticale ne se déclenchait jamais et le scan cherchait une barrière sur
+    TOUT l'historique restant au lieu de ``MAX_HOLD_DAYS`` jours. On dérive
+    l'horizon de l'unité réelle de l'index.
+
+    (``Timedelta.as_unit(u).value`` ne convient PAS : ``.value`` reste exprimé
+    en nanosecondes quelle que soit l'unité. On passe donc par numpy.)
+    """
+    horizon = pd.Timedelta(days=max_hold_days).to_timedelta64()
+    return int(horizon.astype(f"timedelta64[{index.unit}]").astype("int64"))
 
 
 def _hlc(frame: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -73,8 +100,8 @@ def triple_barrier_labels(
 
     high, low, close = _hlc(frame)
     atr = atr_series(frame).to_numpy()
-    ts = frame.index.asi8  # int64 nanosecondes UTC
-    horizon = max_hold_days * _NS_PER_DAY
+    ts = frame.index.asi8  # int64 dans l'unité de l'index (ns, µs…)
+    horizon = _horizon_ticks(frame.index, max_hold_days)
     n = len(frame)
 
     labels = np.full(n, np.nan)
@@ -83,6 +110,13 @@ def triple_barrier_labels(
     # Fins de fenêtre (barrière verticale) calculées d'un coup : pour chaque
     # t, dernière bougie dans (t, t + horizon].
     ends = np.searchsorted(ts, ts + horizon, side="right") - 1
+    # Fenêtre INCOMPLÈTE (l'horizon dépasse la fin du frame) → pas de label.
+    # Sans ça, les dernières bougies étaient étiquetées sur une poignée de
+    # minutes au lieu de MAX_HOLD_DAYS jours : un label faux (et non-NaN, donc
+    # conservé par le dropna de l'entraînement) sur toute la queue de chaque
+    # pli. Ce n'est PAS une fuite — c'est du bruit appris comme un signal.
+    if n:
+        ends = np.where(ts + horizon > ts[-1], -1, ends)
 
     # Le scan de la première barrière touchée est fait par CHUNKS numpy :
     # même résultat que la boucle bougie par bougie (y compris la règle de
@@ -99,7 +133,7 @@ def triple_barrier_labels(
         lower = close[t] - atr_mult * atr_t
         end = int(ends[t])
         if end <= t:
-            continue  # pas de fenêtre avant → label indéfini
+            continue  # fenêtre avant absente ou incomplète → label indéfini
         label, barrier = None, None
         j0 = t + 1
         while j0 <= end:
@@ -110,8 +144,11 @@ def triple_barrier_labels(
                 up_hit = high[j] >= upper
                 down_hit = low[j] <= lower
                 if up_hit and down_hit:
-                    # Les deux dans la même bougie : on tranche par le close.
-                    label, barrier = (1, "tp") if close[j] >= close[t] else (0, "sl")
+                    # Les deux dans la même bougie : on retient la BASSE, comme
+                    # le moteur d'exécution (convention conservatrice — l'ordre
+                    # intrabar réel est inconnu, on se pénalise). Toute autre
+                    # règle apprendrait au modèle des gains non délivrables.
+                    label, barrier = 0, "sl"
                 elif up_hit:
                     label, barrier = 1, "tp"
                 else:
