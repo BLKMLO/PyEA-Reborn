@@ -1,6 +1,6 @@
 # Justification des choix techniques
 
-Les décisions datées vivent dans le journal de `CLAUDE.md` ; ce document
+Les décisions datées vivent dans le journal de `LLM.md` ; ce document
 développe le raisonnement pour celles qui structurent le projet.
 
 - **REST + WebSocket** (plutôt que du polling ou du SSE) : REST couvre les

@@ -1,7 +1,7 @@
 """Singleton d'exécution du flux live (feed + moteur).
 
 Même statut que ``broker_runtime`` (singleton de module, cf. points de
-vigilance de CLAUDE.md) : il donne à l'application UN point d'accès pour
+vigilance de LLM.md) : il donne à l'application UN point d'accès pour
 démarrer/arrêter le flux temps réel. ``app_factory`` le configure au
 démarrage ; les endpoints de connexion/déconnexion broker le pilotent (le
 flux n'a de sens que broker connecté).

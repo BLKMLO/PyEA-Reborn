@@ -1,7 +1,7 @@
 """État d'exécution du broker (gateway active + connexion).
 
 Singleton de module, même statut assumé que ``broker_credentials``,
-``event_bus`` et ``job_manager`` (cf. points de vigilance de CLAUDE.md) :
+``event_bus`` et ``job_manager`` (cf. points de vigilance de LLM.md) :
 il donne à l'API un point d'accès unique à la gateway et à son état de
 connexion RÉEL — plus de ``broker_connected`` codé en dur.
 

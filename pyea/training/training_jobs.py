@@ -114,6 +114,6 @@ class TrainingJobManager:
 
 
 # Instance unique de l'application (même statut que event_bus — cf. point
-# de vigilance n°1 de CLAUDE.md : à injecter via app_factory si les tests
+# de vigilance n°1 de LLM.md : à injecter via app_factory si les tests
 # l'exigent un jour).
 job_manager = TrainingJobManager()
