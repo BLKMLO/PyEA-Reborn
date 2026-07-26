@@ -52,6 +52,11 @@ class WalkForwardFold:
     test_bars: int
     train_report: dict[str, Any] | None = None  # Retour de strategy.train()
     test_stats: dict[str, Any] = field(default_factory=dict)
+    # AUC recalculée sur le bloc de test (skill réel du modèle, ≈ 0,5 = aucun
+    # pouvoir prédictif). L'écart avec l'AUC in-sample mesure le
+    # surapprentissage — bien plus directement que le taux de gain OOS, qui
+    # dépend en plus des coûts et du tie-break d'exécution.
+    oos_auc: float | None = None
 
 
 def split_walkforward(
@@ -150,6 +155,13 @@ def run_walkforward(
         context = train_frame.tail(OOS_CONTEXT_BARS)
         result = engine.run(symbol, test_frame, timeframe, context=context)
         fold.test_stats = result.stats
+
+        # AUC out-of-sample du pli : le moteur a chauffé la stratégie sur
+        # contexte + test (mêmes features qu'à l'exécution) ; on restreint
+        # l'évaluation au bloc de test. None pour une stratégie sans modèle.
+        warmup_frame = pd.concat([context, test_frame])
+        warmup_frame = warmup_frame[~warmup_frame.index.duplicated(keep="last")]
+        fold.oos_auc = strategy.oos_auc(warmup_frame, test_frame.index)
 
         # Courbe OOS concaténée : chaque pli repart du cumul précédent.
         for timestamp, value in result.equity_curve:

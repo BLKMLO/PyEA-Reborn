@@ -90,6 +90,26 @@ def test_signaux_bien_formes() -> None:
             assert sig.take_profit < price < sig.stop_loss
 
 
+def test_oos_auc_sans_modele_renvoie_none() -> None:
+    strat = CouleuvreV01()
+    frame = _random_walk(600, seed=21)
+    assert strat.oos_auc(frame, frame.index) is None
+
+
+def test_oos_auc_mesure_le_skill_reel() -> None:
+    """Sur bruit pur : AUC in-sample élevée (mémorisation) mais AUC
+    out-of-sample ≈ 0,5 (aucun skill) — l'écart mesure le surapprentissage."""
+    frame = _random_walk(6000, seed=22)
+    half = len(frame) // 2
+    strat = CouleuvreV01()
+    report = asyncio.run(strat.train(frame.iloc[:half], {"fold": 1}))
+    test_frame = frame.iloc[half:]
+    auc_oos = strat.oos_auc(test_frame, test_frame.index)
+    assert auc_oos is not None
+    assert 0.40 <= auc_oos <= 0.60  # bruit : pas de pouvoir prédictif
+    assert report["train_auc"] > 0.7  # mémorisation in-sample
+
+
 def test_pas_de_fuite_pnl_nul_sur_bruit() -> None:
     """Entraînement puis OOS sur bruit pur : taux de gain ≈ 50 %."""
     frame = _random_walk(9000, seed=123)
@@ -189,3 +209,7 @@ def test_walkforward_bout_en_bout(tmp_path) -> None:
     assert (tmp_path / "metadata.json").exists()
     assert (tmp_path / "fold_1" / "model.txt").exists()  # modèle par pli sauvé
     assert (tmp_path / "fold_1" / "features.json").exists()
+    # AUC OOS par pli : calculée (sur bruit, ≈ 0,5 — skill réel, pas IS).
+    for fold in report["folds"]:
+        assert fold["oos_auc"] is not None
+        assert 0.0 <= fold["oos_auc"] <= 1.0

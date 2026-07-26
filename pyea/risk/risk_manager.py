@@ -113,7 +113,11 @@ class RiskManager:
         """
         on_symbol = sum(1 for p in open_positions if p.symbol == signal.symbol)
         if on_symbol >= self._max_positions_per_symbol:
-            logger.info(
+            # Rejet ROUTINIER, pas un événement : une stratégie qui ré-affirme
+            # son biais à chaque bougie (Couleuvre : > 60 % des bougies)
+            # produit un rejet par bougie tant que la position est ouverte —
+            # des milliers de lignes par backtest si journalisées en INFO.
+            logger.debug(
                 "Signal %s %s rejeté : %d position(s) déjà ouverte(s) sur ce "
                 "symbole (max %d).",
                 signal.action.value, signal.symbol,
@@ -121,7 +125,7 @@ class RiskManager:
             )
             return False
         if len(open_positions) >= self._max_open_positions:
-            logger.info(
+            logger.debug(
                 "Signal %s %s rejeté : %d position(s) ouverte(s) sur le compte "
                 "(max %d).",
                 signal.action.value, signal.symbol,

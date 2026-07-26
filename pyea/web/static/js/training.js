@@ -4,7 +4,8 @@
  * POST /api/training/run → job en arrière-plan ; progression temps réel par
  * le WebSocket (topic training.progress) + polling de secours. Le rendu
  * met en avant l'out-of-sample : cartes OOS, courbe d'équité OOS, table des
- * plis avec l'AUC in-sample en regard (écart = surapprentissage), et la
+ * plis avec les AUC in-sample et out-of-sample en regard (écart =
+ * surapprentissage), et la
  * définition figée du modèle (lecture seule, servie par l'API).
  *
  * Règle du projet : graphiques initialisés dans static/js/, jamais inline.
@@ -280,11 +281,13 @@ function renderTraining(report) {
   document.getElementById("tr-folds-body").innerHTML = report.folds.map(fold => {
     const tr = fold.train_report || {};
     const aucIs = tr.train_auc != null ? tr.train_auc.toFixed(3) : "—";
+    const aucOos = fold.oos_auc != null ? fold.oos_auc.toFixed(3) : "—";
     return `
     <tr class="border-t border-slate-700/60">
       <td class="py-1 pr-2">${fold.index}</td>
       <td class="pr-2">${fold.train_bars}</td>
       <td class="pr-2 text-slate-400">${aucIs}</td>
+      <td class="pr-2 ${fold.oos_auc != null && fold.oos_auc >= 0.55 ? "text-emerald-400" : "text-slate-400"}">${aucOos}</td>
       <td class="pr-2">${fold.test_start.slice(0, 10)} → ${fold.test_end.slice(0, 10)}</td>
       <td class="pr-2">${fold.test_stats.trades}</td>
       <td class="pr-2 ${fold.test_stats.total_pnl >= 0 ? "text-emerald-400" : "text-red-400"}">${fold.test_stats.total_pnl}</td>

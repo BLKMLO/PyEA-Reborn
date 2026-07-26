@@ -270,6 +270,24 @@ class CouleuvreV01(Strategy):
         if len(self._buffer) > _LIVE_BUFFER_BARS:
             self._buffer = self._buffer.iloc[-_LIVE_BUFFER_BARS:]
 
+    def oos_auc(self, frame: pd.DataFrame, test_index: pd.DatetimeIndex) -> float | None:
+        """AUC du modèle sur le bloc de test d'un pli (skill réel).
+
+        Features et labels sont calculés sur ``frame`` (chauffe + test) —
+        exactement comme le moteur le fait pour l'exécution — puis restreints
+        aux timestamps du bloc de test. Les labels regardent vers l'avenir
+        DANS le bloc (queue en NaN, retirée) : c'est une métrique
+        d'évaluation honnête, jamais une entrée d'entraînement.
+        """
+        if self._model is None:
+            return None
+        x, y = _build_dataset(frame)
+        in_test = x.index.isin(test_index)
+        x, y = x[in_test], y[in_test]
+        if len(y) < 2 or y.nunique() < 2:
+            return None
+        return _auc(y.to_numpy(), self._model.predict(x))
+
     async def shutdown(self) -> None:
         # Libère les buffers d'inférence (le modèle reste en mémoire).
         self._proba = None

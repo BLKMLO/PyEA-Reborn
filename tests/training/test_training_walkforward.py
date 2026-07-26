@@ -62,6 +62,8 @@ def test_run_walkforward_strategie_muette(tmp_path: Path) -> None:
     assert report["cancelled"] is False
     # 2 événements de progression par pli (train + test).
     assert len(events) == 6
+    # Sans modèle entraîné (jeu trop court), l'AUC OOS est honnêtement None.
+    assert all(fold["oos_auc"] is None for fold in report["folds"])
     # Les artefacts sont archivés.
     assert (tmp_path / "run" / "metadata.json").exists()
 

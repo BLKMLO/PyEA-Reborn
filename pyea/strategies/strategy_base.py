@@ -45,6 +45,22 @@ class Strategy(ABC):
         """
         return None
 
+    def oos_auc(self, frame: pd.DataFrame, test_index: pd.DatetimeIndex) -> float | None:
+        """AUC du modèle sur un bloc OUT-OF-SAMPLE (skill réel, non mémorisé).
+
+        Appelée par le walk-forward après le backtest de chaque pli.
+        ``frame`` = contexte de chauffe + bloc de test (le même frame que
+        celui passé à ``warmup`` par le moteur) ; ``test_index`` = les
+        timestamps du seul bloc de test, sur lesquels l'AUC est restreinte.
+
+        Optionnel : une stratégie sans modèle prédictif garde ce défaut
+        (``None`` → l'UI affiche « — »). Contrairement à l'AUC in-sample du
+        rapport d'entraînement (qui mesure la mémorisation), cette métrique
+        est calculée sur des données jamais vues au fit — l'écart entre les
+        deux mesure le surapprentissage.
+        """
+        return None
+
     def describe(self) -> dict[str, str]:
         """Métadonnées affichées sur le dashboard."""
         return {"name": self.name, "version": self.version}
