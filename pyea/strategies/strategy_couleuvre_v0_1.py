@@ -79,6 +79,15 @@ _LGBM_PARAMS: dict[str, Any] = {
 }
 _NUM_BOOST_ROUND = 300
 
+#: Part de la QUEUE du bloc d'entraînement réservée à la validation de
+#: l'early stopping. Causale : cette queue reste strictement dans le passé
+#: du pli (jamais dans le bloc out-of-sample) — aucune fuite.
+_VALIDATION_FRACTION = 0.15
+_EARLY_STOPPING_ROUNDS = 30
+#: En dessous, la queue de validation est trop pauvre pour arrêter quoi que
+#: ce soit de fiable → on entraîne sur tout le bloc, comme avant.
+_MIN_VALIDATION_SAMPLES = 100
+
 
 @register_strategy
 class CouleuvreV01(Strategy):
@@ -114,14 +123,40 @@ class CouleuvreV01(Strategy):
                 "reason": "jeu trop court ou une seule classe",
             }
 
-        dataset = lgb.Dataset(x, label=y, feature_name=FEATURE_COLUMNS)
-        self._model = lgb.train(_LGBM_PARAMS, dataset, num_boost_round=_NUM_BOOST_ROUND)
+        # Early stopping sur la QUEUE du bloc (validation causale) : sans elle,
+        # les 300 arbres mémorisent le bruit — mesuré sur EURUSD H1 : AUC
+        # in-sample 0,94 contre AUC out-of-sample 0,52, probas OOS décalibrées
+        # → signaux sur > 60 % des bougies → coûts > edge. La queue de
+        # validation reste dans le passé du pli, jamais dans l'OOS.
+        n_valid = int(len(y) * _VALIDATION_FRACTION)
+        if n_valid >= _MIN_VALIDATION_SAMPLES:
+            split = len(y) - n_valid
+            train_set = lgb.Dataset(
+                x.iloc[:split], label=y.iloc[:split], feature_name=FEATURE_COLUMNS
+            )
+            valid_set = lgb.Dataset(
+                x.iloc[split:], label=y.iloc[split:],
+                feature_name=FEATURE_COLUMNS, reference=train_set,
+            )
+            self._model = lgb.train(
+                _LGBM_PARAMS,
+                train_set,
+                num_boost_round=_NUM_BOOST_ROUND,
+                valid_sets=[valid_set],
+                callbacks=[lgb.early_stopping(_EARLY_STOPPING_ROUNDS, verbose=False)],
+            )
+        else:
+            dataset = lgb.Dataset(x, label=y, feature_name=FEATURE_COLUMNS)
+            self._model = lgb.train(_LGBM_PARAMS, dataset, num_boost_round=_NUM_BOOST_ROUND)
 
         scores = self._model.predict(x)
         report: dict[str, Any] = {
             "trained": True,
             "n_samples": n_samples,
             "n_features": len(FEATURE_COLUMNS),
+            # Nombre d'arbres réellement retenus (≤ _NUM_BOOST_ROUND avec
+            # early stopping) : un chiffre bas signe un surapprentissage coupé tôt.
+            "n_trees": self._model.num_trees(),
             "label_balance": round(float(y.mean()), 4),  # part de « haute d'abord »
             "train_accuracy": round(float(((scores >= 0.5).astype(int) == y).mean()), 4),
             "train_auc": _auc(y.to_numpy(), scores),  # in-sample (optimiste)

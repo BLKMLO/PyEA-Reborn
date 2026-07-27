@@ -158,7 +158,7 @@ async def _fetch_day(
     spec: InstrumentSpec,
     day: date,
     side: str,
-    retries: int = 3,
+    retries: int = 5,
 ) -> bytes | None:
     """Télécharge un fichier jour/côté. ``None`` si absent (404)."""
     url = candle_url(spec, day, side)
@@ -176,6 +176,21 @@ async def _fetch_day(
                 return None
             if response.status_code == 200:
                 return response.content
+            if response.status_code == 429:
+                # Rate limit Dukascopy : on honore Retry-After si présent,
+                # sinon une pause LONGUE et croissante (le backoff 1-2-4 s des
+                # autres erreurs est bien trop court pour une limite de débit,
+                # et réessaier tout de suite aggrave le bannissement).
+                if attempt == retries:
+                    response.raise_for_status()
+                retry_after = float(response.headers.get("Retry-After", 0) or 0)
+                wait = max(retry_after, 5.0 * (attempt + 1))
+                logger.warning(
+                    "429 (limite de débit), pause %.0f s avant retry %d/%d : %s",
+                    wait, attempt + 1, retries, url,
+                )
+                await asyncio.sleep(wait)
+                continue
             if attempt == retries:
                 response.raise_for_status()
             await asyncio.sleep(2**attempt)
@@ -247,12 +262,18 @@ async def download_history(
     end_year: int,
     data_dir: Path,
     force: bool = False,
-    concurrency: int = 8,
+    concurrency: int = 3,
 ) -> dict[str, list[int]]:
     """Télécharge tout l'historique demandé. Retourne {symbole: années écrites}.
 
     Reprise incrémentale : une année déjà présente sur disque est sautée
     (sauf ``force``) ; l'année en cours est toujours re-téléchargée.
+
+    ``concurrency`` = requêtes simultanées max vers Dukascopy. Garder une
+    valeur BASSE (défaut 3) : à 8, le flux déclenchait des 429 (limite de
+    débit) en rafale — lentes à expirer, elles coûtaient plus de temps
+    qu'elles n'en faisaient gagner. Les 429 sont traitées avec un backoff
+    long (``Retry-After`` honoré) dans ``_fetch_day``.
     """
     # Tout valider AVANT le premier octet téléchargé : une faute de frappe
     # dans un symbole ou des années inversées doivent échouer immédiatement

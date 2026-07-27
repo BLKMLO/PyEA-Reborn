@@ -31,9 +31,15 @@ def history_dir(tmp_path: Path):
 
     settings = get_settings()
     original = settings.history_data_dir
+    original_db = settings.database_url
     settings.history_data_dir = str(tmp_path)
+    # Base isolée aussi : l'endpoint /run résout le dernier run entraîné en
+    # base — sans isolation, les runs réels de la machine rendraient les tests
+    # dépendants de l'environnement.
+    settings.database_url = f"sqlite:///{tmp_path}/test.db"
     yield
     settings.history_data_dir = original
+    settings.database_url = original_db
 
 
 def _client() -> TestClient:
@@ -55,7 +61,9 @@ def test_run_backtest_h1_strategie_vide(history_dir: None) -> None:
         )
     assert response.status_code == 200
     result = response.json()
-    # 2 jours de M1 → 48 bougies H1 ; Couleuvre v0.1 est encore muette.
+    # 2 jours de M1 → 48 bougies H1 ; sans run entraîné en base, aucun modèle
+    # n'est chargé → Couleuvre v0.1 reste muette (honnête).
+    assert result["model"] is None
     assert result["stats"]["bars"] == 48
     assert result["stats"]["trades"] == 0
     assert result["trades"] == []

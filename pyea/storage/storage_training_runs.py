@@ -11,10 +11,18 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from pyea.storage.storage_database import get_session
 from pyea.storage.storage_models import TrainingRun
+
+# Départage stable quand deux runs partagent le MÊME created_at : l'horloge
+# Windows a une résolution de ~15 ms, deux insertions rapides (tests, retries)
+# tombent dans le même tick et un ORDER BY created_at seul devient
+# indéterminé (ordre arbitraire → test flaky, mauvais « dernier run » en
+# production). ``rowid`` = ordre d'insertion SQLite (spécifique SQLite, comme
+# ``_add_missing_columns`` — à revoir lors d'une migration Postgres).
+_ROWID_DESC = text("rowid DESC")
 
 
 def _as_utc_iso(moment: datetime) -> str:
@@ -79,7 +87,9 @@ def list_runs(limit: int = 50) -> list[dict[str, Any]]:
     """Runs les plus récents d'abord, prêts à être sérialisés en JSON."""
     with get_session() as session:
         rows = session.scalars(
-            select(TrainingRun).order_by(TrainingRun.created_at.desc()).limit(limit)
+            select(TrainingRun)
+            .order_by(TrainingRun.created_at.desc(), _ROWID_DESC)
+            .limit(limit)
         ).all()
         return [
             {
@@ -117,7 +127,7 @@ def latest_completed_run(strategy_name: str, symbol: str) -> dict[str, Any] | No
                 TrainingRun.symbol == symbol,
                 TrainingRun.status == "completed",
             )
-            .order_by(TrainingRun.created_at.desc())
+            .order_by(TrainingRun.created_at.desc(), _ROWID_DESC)
             .limit(1)
         ).first()
         if run is None:

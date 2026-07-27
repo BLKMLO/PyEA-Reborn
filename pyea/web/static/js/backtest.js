@@ -118,6 +118,33 @@ function renderCostNote(stats) {
   note.classList.remove("hidden");
 }
 
+// Modèle chargé pour ce run (page backtest = dernier run entraîné de la
+// paire, même règle de sélection que le live). Sans modèle, une stratégie
+// ML est muette : le dire évite de lire une courbe plate comme un bug.
+function renderModelNote(result) {
+  const note = document.getElementById("bt-model-note");
+  if (!note) return;
+  const model = result.model;
+  if (!model) {
+    note.className = "rounded border border-amber-700/60 bg-amber-900/20 px-3 py-2 text-[11px] text-amber-300";
+    note.textContent =
+      "⚠ Aucun modèle entraîné pour cette paire : la stratégie est MUETTE " +
+      "(0 trade). Entraînez-la d'abord sur la page Entraînement.";
+    note.classList.remove("hidden");
+    return;
+  }
+  const mismatch = model.timeframe !== result.timeframe;
+  note.className = mismatch
+    ? "rounded border border-amber-700/60 bg-amber-900/20 px-3 py-2 text-[11px] text-amber-300"
+    : "rounded border border-slate-700 bg-slate-800/60 px-3 py-2 text-[11px] text-slate-400";
+  note.textContent =
+    `Modèle : run ${model.run_id}, pli ${model.fold} (entraîné en ${model.timeframe})` +
+    (mismatch
+      ? ` — ⚠ vous backtestez en ${result.timeframe} : les features n'ont pas la même granularité.`
+      : ".");
+  note.classList.remove("hidden");
+}
+
 function renderResults(result) {
   const stats = result.stats;
   document.getElementById("bt-empty").classList.add("hidden");
@@ -136,6 +163,7 @@ function renderResults(result) {
     statCard("Sharpe", num2(stats.sharpe_ratio)) +
     statCard("SQN", num2(stats.sqn)) +
     statCard("Profit factor", num2(stats.profit_factor));
+  renderModelNote(result);
   renderCostNote(stats);
 
   if (equityChart) equityChart.destroy();

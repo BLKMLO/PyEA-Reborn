@@ -19,6 +19,7 @@ from pyea.backtest import BacktestEngine
 from pyea.config.config_settings import get_settings
 from pyea.core.core_logging import get_logger
 from pyea.data.data_history_downloader import file_year, load_history, resample_history
+from pyea.live.live_models import resolve_live_model
 from pyea.risk.risk_manager import RiskManager
 from pyea.strategies.strategy_registry import get_strategy, list_strategies
 
@@ -99,16 +100,42 @@ def run_backtest(request: BacktestRunRequest) -> dict[str, Any]:
             status_code=400, detail="Aucune bougie sur la période demandée."
         )
 
+    # La page backtest n'entraîne pas : sans modèle chargé, une stratégie ML
+    # (Couleuvre) rendait 0 trade et une courbe PLATE — honnête mais trompeur
+    # pour l'utilisateur qui venait d'entraîner. On charge donc le même modèle
+    # que le live : dernier run réussi de la paire, dernier pli (règle de
+    # sélection partagée, ``resolve_live_model``). Aucun run → None → la
+    # stratégie reste muette et la réponse le dit explicitement.
+    model = resolve_live_model(request.strategy, request.symbol)
+    if model is not None and model.timeframe != request.timeframe:
+        logger.warning(
+            "Backtest %s en %s avec un modèle entraîné en %s (run %s) : "
+            "les features n'ont pas la même granularité.",
+            request.symbol, request.timeframe, model.timeframe, model.run_id,
+        )
+
     engine = BacktestEngine(
         strategy_cls(), RiskManager(settings),
         commission_per_unit=settings.costs_commission_per_unit,
     )
-    result = engine.run(request.symbol, frame, request.timeframe)
+    result = engine.run(
+        request.symbol, frame, request.timeframe,
+        model_path=str(model.model_path) if model else None,
+    )
 
     return {
         "symbol": result.symbol,
         "timeframe": result.timeframe,
         "strategy": request.strategy,
+        "model": (
+            {
+                "run_id": model.run_id,
+                "fold": model.fold,
+                "timeframe": model.timeframe,
+            }
+            if model
+            else None
+        ),
         "period": {
             "start": frame.index[0].isoformat(),
             "end": frame.index[-1].isoformat(),

@@ -137,8 +137,22 @@ def test_live_inference_equivaut_au_backtest(tmp_path) -> None:
     """L'inférence live (agrégation tick→bougie + recalcul glissant) reproduit
     la décision du backtest (proba pré-calculée par bougie), à quelques flips
     de frontière près (les indicateurs récursifs dépendent d'un historique plus
-    long que le tampon glissant — écart attendu, pas une fuite)."""
-    frame = _close_only(4000, seed=11)
+    long que le tampon glissant — écart attendu, pas une fuite).
+
+    Le frame est close-only (une bougie = un tick au close, condition de
+    comparaison) avec une COMPOSANTE PRÉVISIBLE (sinus) : depuis l'early
+    stopping, un modèle entraîné sur bruit pur n'a plus de conviction (probas
+    ~0,5, jamais de signal) — il faut de la structure pour que le test
+    exerce réellement des décisions, pas seulement des None."""
+    rng = np.random.default_rng(11)
+    n = 4000
+    index = pd.date_range("2022-01-03", periods=n, freq="1h", tz="UTC")
+    i = np.arange(n)
+    close = 1.10 + 0.003 * np.sin(2 * np.pi * i / 96) + rng.normal(0, 0.0002, n).cumsum()
+    frame = pd.DataFrame(
+        {"bid_close": close, "volume": rng.integers(50, 500, n).astype(float)},
+        index=index,
+    )
     train, live_frame = frame.iloc[:2000], frame.iloc[2000:]
 
     strat_bt = CouleuvreV01()

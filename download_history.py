@@ -58,6 +58,11 @@ def main() -> None:
         "--force", action="store_true",
         help="Re-télécharge même les années déjà présentes sur disque.",
     )
+    parser.add_argument(
+        "--concurrency", type=int, default=3,
+        help="Requêtes simultanées max (défaut 3 — au-delà, Dukascopy répond "
+             "429 et le backoff long coûte plus que le parallélisme ne gagne).",
+    )
     args = parser.parse_args()
 
     logger.info(
@@ -72,6 +77,7 @@ def main() -> None:
                 end_year=args.end_year,
                 data_dir=args.data_dir,
                 force=args.force,
+                concurrency=args.concurrency,
             )
         )
     except (KeyError, ValueError) as exc:

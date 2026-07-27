@@ -93,6 +93,10 @@ Config : `config.yaml` (versionné, **prime sur `.env`** — pydantic-settings) 
 - `load_history(data_dir, symbol, start, end)` = lecture (blindé : fichiers
   parasites ignorés, doublons dédupliqués). `resample_history(frame, "H1")` =
   conversion (M1→…→MN1).
+- Téléchargeur : **concurrence basse** (défaut 3, `--concurrency`) — au-delà,
+  Dukascopy répond **429** ; celles-ci sont traitées avec un backoff LONG
+  (`Retry-After` honoré, sinon 5 s × tentative, jusqu'à 5 retries). Le backoff
+  court 1-2-4 s des autres erreurs est inadapté à une limite de débit.
 
 ## État du projet (au 26 juillet 2026)
 
@@ -136,7 +140,11 @@ premier run réel Dukascopy, connexion TWS/MT5, flux live réel.
   OK usage perso). Modèle : entrée Market cheat-on-close, barrières TP/SL =
   Stop+Limit OCO au prix exact, stop prioritaire si les deux franchies, clôture
   forcée fin de semaine ISO + liquidation finale, bougie fantôme, 1 unité
-  nominale re-scalée par `max_position_size`, `engine.run` synchrone.
+  nominale re-scalée par `max_position_size`, `engine.run` synchrone (param
+  `model_path` → transmis à `warmup`). **La page backtest charge le modèle**
+  (dernier run réussi de la paire, dernier pli — règle `resolve_live_model`
+  partagée avec le live) ; sans run → `model: null` + bandeau « stratégie
+  muette », mismatch de timeframe = bandeau ambre.
   **Coûts modélisés** : spread MESURÉ (médiane `ask_close − bid_close`),
   COMM_FIXED par côté, commission optionnelle `costs.commission_per_unit` ;
   stats NETTES + `gross_pnl`/`total_costs` ; sans colonnes ask →
@@ -166,7 +174,10 @@ premier run réel Dukascopy, connexion TWS/MT5, flux live réel.
     via `_horizon_ticks()` (⚠ pandas 3 : index en microsecondes, `asi8` n'est
     PAS en ns — le bug rendait la barrière verticale 1000× trop longue).
   - `train` : features + labels + `dropna`, `lgb.train` natif (pas de sklearn),
-    `model.txt` + `features.json` par pli, AUC IS calculée à la main.
+    **early stopping** (patience 30) sur la queue du bloc (`_VALIDATION_FRACTION
+    = 0,15`, causale — jamais dans l'OOS) : sans elle, les 300 arbres
+    mémorisaient le bruit (AUC IS 0,94 / OOS 0,52 mesuré). `n_trees` retenu au
+    rapport. `model.txt` + `features.json` par pli, AUC IS calculée à la main.
   - `on_tick` : proba → seuils 0.55/0.45 → ENTER_LONG/SHORT avec mêmes
     barrières ATR. Non-fuite prouvée : sur bruit, AUC IS ~0,96 / OOS ~50 %.
 - **RiskManager.evaluate v2** : HOLD ignoré, EXIT jamais bloqué, entrées à
@@ -195,6 +206,28 @@ premier run réel Dukascopy, connexion TWS/MT5, flux live réel.
 
 ## Journal de décisions (condensé, antichronologique)
 
+- **2026-07-26 (soir)** — **Trois corrections demandées par l'utilisateur** :
+  (1) **Early stopping** dans `CouleuvreV01.train` (patience 30 sur la queue
+  causale du bloc, 15 %) — effet MESURÉ sur EURUSD H1 réel : arrêt à **2
+  arbres**, AUC IS 0,94 → 0,65, AUC OOS 0,52 → 0,49, signaux 63,7 % → **0 %**
+  des bougies. Verdict honnête : il n'y a PAS d'edge exploitable dans ces
+  features sur cette paire/timeframe ; l'early stopping ne fait que le révéler
+  (le modèle s'abstient au lieu de perdre le spread). Le travail d'edge est du
+  ressort d'une `couleuvre_v0_2` (timeframe, seuils, features, labels).
+  (2) **Téléchargeur 429** : concurrence 8 → 3 (`--concurrency`), 429 traités
+  avec backoff long (`Retry-After` honoré, sinon 5 s × tentative, 5 retries).
+  (3) **Page backtest qui restait plate** : elle ne chargeait aucun modèle →
+  `engine.run` accepte `model_path` et l'endpoint résout le dernier run réussi
+  de la paire (`resolve_live_model`, même règle que le live) ; bandeau modèle
+  dans l'UI (run/pli/timeframe, ambre si mismatch de timeframe ou modèle
+  absent). `test_api_backtest` : base isolée (sinon les runs réels de la
+  machine rendaient le test « stratégie muette » dépendant de
+  l'environnement) ; le test d'équivalence live/backtest utilise désormais un
+  frame à composante prévisible (sinus) — sur bruit pur, l'early stopping
+  laisse le modèle sans conviction (plus aucun signal à comparer).
+  Au passage, test flaky débusqué : `latest_completed_run` triait par
+  `created_at` seul — or l'horloge Windows (~15 ms) donne le même tick à deux
+  insertions rapides → départage `rowid DESC` ajouté (idem `list_runs`).
 - **2026-07-26** — **LLM.md devient la mémoire unique pour toutes les IA**
   (demande utilisateur, pour éviter que les contextes se chevauchent) :
   reprise du condensé unifié (228 lignes, commit `ec624df`), `CLAUDE.md` et

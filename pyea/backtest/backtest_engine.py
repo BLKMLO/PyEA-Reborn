@@ -290,6 +290,7 @@ class BacktestEngine:
         frame: pd.DataFrame,
         timeframe: str,
         context: pd.DataFrame | None = None,
+        model_path: str | None = None,
     ) -> BacktestResult:
         """Exécute le backtest (synchrone : backtrader l'est ; les méthodes
         asynchrones de la stratégie sont pontées sur une boucle dédiée).
@@ -305,6 +306,10 @@ class BacktestEngine:
         NaN, donc zéro trade possible — un pli out-of-sample perdait ainsi le
         début de sa période. Le contexte est strictement causal : ce sont des
         bougies passées, antérieures au bloc évalué, jamais des bougies futures.
+
+        ``model_path`` = artefact de modèle à charger (page backtest : dernier
+        run entraîné de la paire). Transmis tel quel à ``Strategy.warmup`` ;
+        ``None`` = stratégie non entraînée (muette si elle exige un modèle).
         """
         n = len(frame)
         result = BacktestResult(symbol=symbol, timeframe=timeframe, bars=n)
@@ -325,7 +330,10 @@ class BacktestEngine:
         loop = asyncio.new_event_loop()
         try:
             loop.run_until_complete(self._strategy.warmup(
-                {"symbol": symbol, "timeframe": timeframe, "frame": warmup_frame}
+                {
+                    "symbol": symbol, "timeframe": timeframe,
+                    "frame": warmup_frame, "model_path": model_path,
+                }
             ))
             strat = self._run_cerebro(symbol, frame, timeframe, loop, cost_per_side)
         finally:
