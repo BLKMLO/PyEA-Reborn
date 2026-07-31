@@ -29,7 +29,10 @@ const {
 const state = {
   chart: null,          // instance LightweightCharts
   series: null,         // série chandeliers
-  candles: [],          // bougies chargées (ordre chronologique)
+  m1Candles: [],        // bougies M1 BRUTES chargées (ordre chronologique)
+  candles: [],          // bougies AFFICHÉES = M1 agrégées au timeframe courant
+                        // (en M1 : même référence de tableau que m1Candles)
+  timeframe: "M1",      // unité de temps affichée (clé de CHART_TIMEFRAMES)
   hasMore: true,        // reste-t-il de l'historique côté serveur ?
   loadingOlder: false,  // garde anti-requêtes concurrentes du lazy-load
   hovering: false,      // crosshair sur une bougie (fige la légende dessus)
@@ -50,6 +53,84 @@ const DOWN_COLOR = "#f87171";
 function formatChange(pct) {
   if (pct == null || Number.isNaN(pct)) return "";
   return `${pct >= 0 ? "+" : ""}${pct.toFixed(2)} %`;
+}
+
+// --- Unité de temps du graphique -------------------------------------------
+// Le serveur ne sert QUE du M1 (stockage natif) : les unités supérieures
+// sont agrégées ici, côté client, par plancher UTC (même règle que le
+// resample serveur des backtests). `state.m1Candles` garde le brut,
+// `state.candles` est la vue agrégée effectivement affichée.
+
+const CHART_TIMEFRAMES = {
+  M1: 60, M5: 300, M15: 900, M30: 1800, H1: 3600, H4: 14400, D1: 86400,
+};
+
+function bucketStart(time, seconds) {
+  return Math.floor(time / seconds) * seconds;
+}
+
+// Agrégation OHLC : open = premier, high/low = extrêmes, close = dernier.
+// En M1, pas de copie : la vue affichée EST le tableau brut.
+function aggregateCandles(m1Candles, seconds) {
+  if (seconds === CHART_TIMEFRAMES.M1) return m1Candles;
+  const out = [];
+  for (const candle of m1Candles) {
+    const start = bucketStart(candle.time, seconds);
+    const last = out[out.length - 1];
+    if (last && last.time === start) {
+      last.high = Math.max(last.high, candle.high);
+      last.low = Math.min(last.low, candle.low);
+      last.close = candle.close;
+    } else {
+      out.push({ time: start, open: candle.open, high: candle.high,
+                 low: candle.low, close: candle.close });
+    }
+  }
+  return out;
+}
+
+function displayedCandles() {
+  return aggregateCandles(state.m1Candles, CHART_TIMEFRAMES[state.timeframe]);
+}
+
+// Nombre de bougies M1 à demander pour obtenir ~180 bougies AFFICHÉES,
+// plafonné à 15 jours (au-delà, le lazy-load prend le relais au défilement).
+function fetchPoints() {
+  return Math.min(180 * (CHART_TIMEFRAMES[state.timeframe] / 60), 21600);
+}
+
+// Rejoue UNE bougie M1 (nouvelle ou reformée) sur la vue affichée : seul le
+// bucket en cours peut bouger, les buckets passés sont figés.
+function updateDisplayedTail(m1Candle) {
+  const seconds = CHART_TIMEFRAMES[state.timeframe];
+  if (seconds === CHART_TIMEFRAMES.M1) { state.series.update(m1Candle); return; }
+  const start = bucketStart(m1Candle.time, seconds);
+  const last = state.candles[state.candles.length - 1];
+  if (last && last.time === start) {
+    // Une bougie M1 qui se forme ne rétracte jamais ses extrêmes :
+    // max/min suffisent, inutile de re-agréger tout le bucket.
+    last.high = Math.max(last.high, m1Candle.high);
+    last.low = Math.min(last.low, m1Candle.low);
+    last.close = m1Candle.close;
+    state.series.update(last);
+  } else {
+    const bucket = { time: start, open: m1Candle.open, high: m1Candle.high,
+                     low: m1Candle.low, close: m1Candle.close };
+    state.candles.push(bucket);
+    state.series.update(bucket);
+  }
+}
+
+function setTimeframe(timeframe) {
+  if (!CHART_TIMEFRAMES[timeframe] || timeframe === state.timeframe) return;
+  state.timeframe = timeframe;
+  prefs.set("live:timeframe", timeframe); // choix mémorisé entre sessions
+  if (!state.series || !state.m1Candles.length) return;
+  state.candles = displayedCandles();
+  state.series.setData(state.candles);
+  applyTradeMarkers(); // les marqueurs se re-planchent sur les nouveaux buckets
+  if (!state.hovering) updateLegend(state.candles[state.candles.length - 1]);
+  setChartHeader();
 }
 
 // --- Graphique (TradingView Lightweight Charts) ----------------------------
@@ -101,7 +182,7 @@ function updateLegend(candle) {
   const delta = candle.close - candle.open;
   const pct = candle.open ? (delta / candle.open) * 100 : 0;
   legend.innerHTML =
-    `<span class="text-slate-300">${state.activeSymbol} · M1</span>  ` +
+    `<span class="text-slate-300">${state.activeSymbol} · ${state.timeframe}</span>  ` +
     `<span class="text-slate-500">O</span> ${formatPrice(candle.open)}  ` +
     `<span class="text-slate-500">H</span> ${formatPrice(candle.high)}  ` +
     `<span class="text-slate-500">L</span> ${formatPrice(candle.low)}  ` +
@@ -129,7 +210,11 @@ function applyTradeMarkers() {
           : `${trade.executed_at}Z`);
       const buy = trade.side === "BUY";
       return {
-        time: Math.floor(moment.getTime() / 1000),
+        // Plancher au bucket affiché : Lightweight Charts n'affiche un
+        // marqueur que sur une bougie existante — un horodatage brut à la
+        // seconde ne tomberait presque jamais sur une bougie.
+        time: bucketStart(Math.floor(moment.getTime() / 1000),
+          CHART_TIMEFRAMES[state.timeframe]),
         position: buy ? "belowBar" : "aboveBar",
         color: buy ? UP_COLOR : DOWN_COLOR,
         shape: buy ? "arrowUp" : "arrowDown",
@@ -143,11 +228,13 @@ function applyTradeMarkers() {
 }
 
 async function loadInitialCandles() {
-  const response = await fetch(`/api/charts/price-history?symbol=${state.activeSymbol}&points=180`);
+  const response = await fetch(
+    `/api/charts/price-history?symbol=${state.activeSymbol}&points=${fetchPoints()}`);
   if (!response.ok) return;
   const data = await response.json();
   if (data.symbol !== state.activeSymbol) return; // clic entre-temps
-  state.candles = data.candles;
+  state.m1Candles = data.candles;
+  state.candles = displayedCandles();
   state.hasMore = data.has_more;
   state.series.setData(state.candles);
   state.chart.timeScale().scrollToRealTime();
@@ -158,16 +245,17 @@ async function loadInitialCandles() {
 }
 
 async function loadOlderCandles() {
-  if (state.loadingOlder || !state.hasMore || !state.candles.length) return;
+  if (state.loadingOlder || !state.hasMore || !state.m1Candles.length) return;
   state.loadingOlder = true;
   try {
-    const oldest = state.candles[0].time;
+    const oldest = state.m1Candles[0].time;
     const response = await fetch(
-      `/api/charts/price-history?symbol=${state.activeSymbol}&points=180&before=${oldest}`);
+      `/api/charts/price-history?symbol=${state.activeSymbol}&points=${fetchPoints()}&before=${oldest}`);
     if (!response.ok) return;
     const data = await response.json();
     if (data.symbol !== state.activeSymbol || !data.candles.length) return;
-    state.candles = data.candles.concat(state.candles);
+    state.m1Candles = data.candles.concat(state.m1Candles);
+    state.candles = displayedCandles();
     state.hasMore = data.has_more;
     // setData avec les données préfixées : Lightweight Charts conserve la
     // plage visible — le défilement de l'utilisateur n'est pas perturbé.
@@ -179,21 +267,22 @@ async function loadOlderCandles() {
 }
 
 async function refreshChart() {
-  // Rafraîchissement périodique : uniquement les dernières bougies, via
-  // series.update() — la position de défilement est préservée.
+  // Rafraîchissement périodique : uniquement les dernières bougies M1, qui
+  // sont re-agrégées au fil de l'eau — la position de défilement est
+  // préservée (jamais de setData ici).
   if (!state.activeSymbol || !state.series) return;
   const response = await fetch(`/api/charts/price-history?symbol=${state.activeSymbol}&points=10`);
   if (!response.ok) return;
   const data = await response.json();
   if (data.symbol !== state.activeSymbol) return;
   for (const candle of data.candles) {
-    const last = state.candles[state.candles.length - 1];
+    const last = state.m1Candles[state.m1Candles.length - 1];
     if (!last || candle.time > last.time) {
-      state.candles.push(candle);
-      state.series.update(candle);
+      state.m1Candles.push(candle);
+      updateDisplayedTail(candle);
     } else if (candle.time === last.time) {
-      state.candles[state.candles.length - 1] = candle;
-      state.series.update(candle);
+      state.m1Candles[state.m1Candles.length - 1] = candle;
+      updateDisplayedTail(candle);
     }
   }
   // Hors survol, la légende suit la dernière bougie « vivante ».
@@ -202,7 +291,8 @@ async function refreshChart() {
 }
 
 function setChartHeader() {
-  document.getElementById("chart-title").textContent = `${state.activeSymbol} — M1`;
+  document.getElementById("chart-title").textContent =
+    `${state.activeSymbol} — ${state.timeframe}`;
   document.getElementById("chart-updated").textContent =
     `maj ${new Date().toLocaleTimeString()} (toutes les ${state.refreshSeconds}s)`;
   // Variation 24 h de la paire affichée (même source que la watchlist).
@@ -227,6 +317,7 @@ function scheduleRefresh() {
 function setActiveSymbol(symbol) {
   state.activeSymbol = symbol;
   prefs.set("live:symbol", symbol); // retrouvé au prochain chargement de page
+  state.m1Candles = [];
   state.candles = [];
   state.hasMore = true;
   state.hovering = false;
@@ -842,6 +933,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   initPanelResizer();
   initWatchlistControls();
   initWebSocket();
+  // Sélecteur d'unité de temps : posé AVANT le premier chargement de
+  // bougies (l'agrégation en dépend) ; le choix est mémorisé entre sessions.
+  const timeframeSelect = document.getElementById("chart-timeframe");
+  const storedTimeframe = prefs.get("live:timeframe", "M1");
+  state.timeframe = CHART_TIMEFRAMES[storedTimeframe] ? storedTimeframe : "M1";
+  timeframeSelect.value = state.timeframe;
+  timeframeSelect.addEventListener("change", () => setTimeframe(timeframeSelect.value));
   makeSortable(document.getElementById("positions-table"));
   document.getElementById("trading-toggle").addEventListener("click", toggleTrading);
   document.getElementById("chart-fit").addEventListener("click", () => {

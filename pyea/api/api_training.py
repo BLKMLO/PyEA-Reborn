@@ -9,6 +9,7 @@ Le run part en job d'arrière-plan (thread) et retourne immédiatement un
 from __future__ import annotations
 
 import asyncio
+import shutil
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,9 @@ from pyea.config.config_settings import get_settings
 from pyea.core.core_logging import get_logger
 from pyea.data.data_history_downloader import load_history, resample_history
 from pyea.risk.risk_manager import RiskManager
-from pyea.storage.storage_training_runs import create_run, finish_run, list_runs, make_run_id
+from pyea.storage.storage_training_runs import (
+    create_run, delete_run, finish_run, list_runs, make_run_id,
+)
 from pyea.strategies.strategy_registry import get_strategy
 from pyea.training import job_manager, run_walkforward
 
@@ -147,6 +150,37 @@ async def cancel_job(job_id: str) -> dict[str, Any]:
 async def get_runs(limit: int = 50) -> dict[str, Any]:
     """Historique des entraînements (récents d'abord), pour comparaison."""
     return {"runs": list_runs(limit)}
+
+
+@router.delete("/runs/{run_id}")
+async def delete_training_run(run_id: str) -> dict[str, Any]:
+    """Supprime un run : ligne SQL + artefacts disque (``models_dir/<run_id>``).
+
+    404 si le run est inconnu ; 409 s'il est encore « running » (son job peut
+    encore écrire — annuler l'entraînement d'abord). Supprimer le dernier run
+    réussi d'une paire fait automatiquement retomber live/backtest sur le run
+    précédent (``resolve_live_model`` re-requête à chaque appel, aucun cache).
+    """
+    status = delete_run(run_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail=f"Run inconnu : {run_id}")
+    if status == "running":
+        raise HTTPException(
+            status_code=409,
+            detail="Run en cours : annuler l'entraînement d'abord.",
+        )
+    # Garde de sécurité : le run_id vient de l'URL et artifacts_path est
+    # relu de la base — on ne rmtree QUE sous models_dir (un chemin
+    # bidouillé, ex. « .. », ne doit jamais effacer autre chose).
+    base = Path(get_settings().models_dir).resolve()
+    run_dir = (base / run_id).resolve()
+    if run_dir != base and base in run_dir.parents and run_dir.exists():
+        shutil.rmtree(run_dir)
+    elif run_dir.exists():
+        logger.warning("Artefacts du run %s hors de models_dir (%s) : non supprimés.",
+                       run_id, run_dir)
+    logger.info("Run %s (%s) supprimé.", run_id, status)
+    return {"run_id": run_id, "deleted": True}
 
 
 @router.get("/definition/{strategy}")

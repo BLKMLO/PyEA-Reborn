@@ -98,17 +98,23 @@ Config : `config.yaml` (versionné, **prime sur `.env`** — pydantic-settings) 
   (`Retry-After` honoré, sinon 5 s × tentative, jusqu'à 5 retries). Le backoff
   court 1-2-4 s des autres erreurs est inadapté à une limite de débit.
 
-## État du projet (au 26 juillet 2026)
+## État du projet (au 30 juillet 2026)
 
-**Complet de bout en bout, 172 tests.** Reste à valider chez l'utilisateur :
-premier run réel Dukascopy, connexion TWS/MT5, flux live réel.
+**Complet de bout en bout, 174 tests verts** (+1 échec environnemental connu
+sur le poste Windows : MT5 installé, cf. Environnements). Reste à valider chez
+l'utilisateur : premier run réel Dukascopy, connexion TWS/MT5, flux live réel,
+et les 3 pages au navigateur (sélecteur d'unité de temps + suppression de
+runs — pas de navigateur outillé ici).
 
 - **Dashboard** : 3 pages (Live | Backtest | Entraînement). Live : chandeliers
-  M1 Lightweight Charts (pan/zoom, `?before=`, légende OHLC crosshair),
-  watchlist Market Watch (prix/variation, pastille = paire armée), bouton
-  Trading/Stopped par paire (SQLite, défaut Stopped, 409 si broker déconnecté),
-  header en badges (mode, broker cliquable → fenêtre de connexion, stratégie),
-  panneau compte (`GET /api/account` : équité/marge + perte du jour vs plafond).
+  Lightweight Charts (pan/zoom, `?before=`, légende OHLC crosshair), **unité
+  de temps M1→D1 agrégée côté client** (le serveur ne sert que du M1 ;
+  plancher UTC partagé, choix mémorisé `live:timeframe`, marqueurs de trades
+  re-planchés sur le bucket), watchlist Market Watch (prix/variation,
+  pastille = paire armée), bouton Trading/Stopped par paire (SQLite, défaut
+  Stopped, 409 si broker déconnecté), header en badges (mode, broker cliquable
+  → fenêtre de connexion, stratégie), panneau compte (`GET /api/account` :
+  équité/marge + perte du jour vs plafond).
 - **Brokers — deux gateways COMPLÈTES** (connexion, compte, routage, flux,
   comptes rendus) :
   - **IB** (`ib_async`, import paresseux) : `connectAsync` sans login/mdp (TWS
@@ -153,7 +159,11 @@ premier run réel Dukascopy, connexion TWS/MT5, flux live réel.
   split aléatoire), job de thread unique annulable, progression WS
   `training.progress` + reprise après reload (`/api/training/current-job`),
   `fail_orphan_runs` au démarrage, historisé SQLite (`training_runs`) +
-  artefacts `data/models/<run>/fold_<i>/`. **Agrégation honnête** : profit
+  artefacts `data/models/<run>/fold_<i>/`. **Suppression d'un run** :
+  `DELETE /api/training/runs/{id}` (ligne SQL + `rmtree` des artefacts, garde
+  anti-chemin bidouillé ; 404 inconnu, 409 « running ») + bouton ✕ dans le
+  tableau des runs (confirm JS ; live/backtest retombent sur le run précédent
+  via `resolve_live_model`, sans cache). **Agrégation honnête** : profit
   factor ET win rate OOS recalculés sur TOUS les trades (jamais de moyenne de
   ratios par pli) ; Sharpe/SQN par pli seulement ; colonnes **AUC IS vs AUC
   OOS par pli** (l'écart mesure directement le surapprentissage — AUC OOS via
@@ -206,6 +216,22 @@ premier run réel Dukascopy, connexion TWS/MT5, flux live réel.
 
 ## Journal de décisions (condensé, antichronologique)
 
+- **2026-07-30** — **Trois ajouts interface** (travail repris en cours de
+  route) : (1) **Sélecteur d'unité de temps M1→D1** sur la page Live :
+  le serveur ne sert que du M1, l'agrégation est faite côté client dans
+  `charts.js` (`CHART_TIMEFRAMES`, plancher UTC — même règle que le resample
+  serveur ; `state.m1Candles` = brut, `state.candles` = vue agrégée, refresh
+  incrémental par bucket, fetch dimensionné à ~180 bougies affichées plafonné
+  à 15 j de M1, marqueurs de trades re-planchés sur le bucket — un horodatage
+  à la seconde ne tombe jamais sur une bougie, Lightweight Charts exige
+  l'égalité). Choix mémorisé (`live:timeframe`). (2) **Suppression d'un run
+  d'entraînement** : `delete_run` (storage, refuse « running ») +
+  `DELETE /api/training/runs/{id}` (404/409, `rmtree` des artefacts gardé
+  sous `models_dir`) + bouton ✕ par ligne du tableau des runs (confirm,
+  délégation d'événement). 2 tests ajoutés. (3) **Bandeau backtest « modèle
+  abstinent »** : modèle chargé mais 0 trade (early stopping → probas jamais
+  au-delà des seuils) expliqué en ambre, pour ne pas lire la courbe plate
+  comme un bug.
 - **2026-07-26 (soir)** — **Trois corrections demandées par l'utilisateur** :
   (1) **Early stopping** dans `CouleuvreV01.train` (patience 30 sur la queue
   causale du bloc, 15 %) — effet MESURÉ sur EURUSD H1 réel : arrêt à **2

@@ -72,6 +72,36 @@ def test_entrainement_complet(training_env: Path) -> None:
         assert runs[0]["oos_trades"] == 0
 
 
+def test_suppression_run(training_env: Path) -> None:
+    """DELETE /runs/{id} : ligne SQL + artefacts effacés ; 404 si inconnu,
+    409 si le run est encore « running »."""
+    from pyea.storage.storage_database import init_db
+    from pyea.storage.storage_training_runs import create_run, finish_run
+
+    init_db()
+    settings = get_settings()
+    create_run("run-a-supprimer", "couleuvre_v0_1", "EURUSD", "H1", 3, {})
+    finish_run("run-a-supprimer", "completed")
+    artifacts = Path(settings.models_dir) / "run-a-supprimer"
+    artifacts.mkdir(parents=True)
+    (artifacts / "metadata.json").write_text("{}")
+
+    with TestClient(create_app()) as client:
+        # Créé APRÈS le démarrage : le lifespan marque « failed » les runs
+        # « running » orphelins (fail_orphan_runs).
+        create_run("run-en-cours", "couleuvre_v0_1", "EURUSD", "H1", 3, {})
+        missing = client.delete("/api/training/runs/inconnu")
+        running = client.delete("/api/training/runs/run-en-cours")
+        ok = client.delete("/api/training/runs/run-a-supprimer")
+        runs = client.get("/api/training/runs").json()["runs"]
+
+    assert missing.status_code == 404
+    assert running.status_code == 409
+    assert ok.status_code == 200 and ok.json()["deleted"] is True
+    assert not artifacts.exists()  # artefacts disque effacés aussi
+    assert {run["id"] for run in runs} == {"run-en-cours"}
+
+
 def test_definition_modele() -> None:
     with TestClient(create_app()) as client:
         ok = client.get("/api/training/definition/couleuvre_v0_1")

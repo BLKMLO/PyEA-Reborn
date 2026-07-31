@@ -315,9 +315,32 @@ async function loadRuns() {
           <td class="pr-2">${run.oos_trades ?? "—"}</td>
           <td class="pr-2">${run.oos_pnl ?? "—"}</td>
           <td class="pr-2">${run.oos_win_rate === null || run.oos_win_rate === undefined ? "—" : (run.oos_win_rate * 100).toFixed(1) + " %"}</td>
-          <td>${num2(run.oos_profit_factor)}</td>
+          <td class="pr-2">${num2(run.oos_profit_factor)}</td>
+          <td class="text-right">${run.status === "running" ? "" :
+            `<button type="button" data-delete-run="${run.id}" title="Supprimer ce run (historique + artefacts disque)"
+                     class="rounded px-1 text-slate-500 hover:bg-red-900/40 hover:text-red-300">✕</button>`}</td>
         </tr>`).join("")
-    : `<tr><td colspan="10" class="py-2 text-slate-500">Aucun entraînement pour l'instant.</td></tr>`;
+    : `<tr><td colspan="11" class="py-2 text-slate-500">Aucun entraînement pour l'instant.</td></tr>`;
+}
+
+// Suppression d'un run terminé : ligne d'historique ET artefacts disque
+// (modèles entraînés). Un run « running » n'a pas de bouton — il faut
+// d'abord annuler l'entraînement (le serveur renverrait 409 de toute façon).
+async function deleteRun(runId) {
+  if (!window.confirm(
+    `Supprimer le run ${runId} ?\n\n` +
+    "L'historique ET les modèles entraînés seront effacés du disque. " +
+    "Si c'était le dernier run réussi de sa paire, live et backtest " +
+    "retomberont sur le run précédent.")) return;
+  const response = await fetch(`/api/training/runs/${encodeURIComponent(runId)}`,
+    { method: "DELETE" });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    showToast(err.detail || `Suppression du run ${runId} refusée.`, "error");
+    return;
+  }
+  showToast(`Run ${runId} supprimé.`, "info");
+  loadRuns();
 }
 
 // --- Init ------------------------------------------------------------------
@@ -338,5 +361,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("tr-run").addEventListener("click", runTraining);
   document.getElementById("tr-cancel").addEventListener("click", cancelTraining);
   document.getElementById("tr-strategy").addEventListener("change", (e) => loadModelDefinition(e.target.value));
+  // Délégation : les lignes de runs sont rebâties à chaque loadRuns().
+  document.getElementById("tr-runs-body").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-delete-run]");
+    if (button) deleteRun(button.dataset.deleteRun);
+  });
   await resumeRunningJob(); // page rechargée pendant un run → ré-attachement
 });

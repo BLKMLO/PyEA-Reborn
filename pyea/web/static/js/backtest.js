@@ -133,6 +133,20 @@ function renderModelNote(result) {
     note.classList.remove("hidden");
     return;
   }
+  // Modèle chargé mais 0 trade : l'early stopping produit un modèle qui
+  // s'abstient (probas jamais au-delà des seuils 0.55/0.45). Résultat honnête
+  // (pas d'edge exploitable), pas un bug — le dire évite de lire la courbe
+  // plate comme un dysfonctionnement.
+  if (result.stats.trades === 0) {
+    note.className = "rounded border border-amber-700/60 bg-amber-900/20 px-3 py-2 text-[11px] text-amber-300";
+    note.textContent =
+      `⚠ Modèle chargé (run ${model.run_id}, pli ${model.fold}) mais AUCUN signal émis : ` +
+      "l'early stopping a produit un modèle qui s'abstient (probas jamais au-delà " +
+      "des seuils 0.55/0.45). Pas d'edge exploitable sur cette paire/timeframe — " +
+      "résultat honnête, pas un bug.";
+    note.classList.remove("hidden");
+    return;
+  }
   const mismatch = model.timeframe !== result.timeframe;
   note.className = mismatch
     ? "rounded border border-amber-700/60 bg-amber-900/20 px-3 py-2 text-[11px] text-amber-300"

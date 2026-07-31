@@ -62,6 +62,23 @@ def test_profit_factor_persiste_dans_l_historique(tmp_db: Path) -> None:
     assert run["oos_profit_factor"] == 1.42
 
 
+def test_suppression_run_termine_seulement(tmp_db: Path) -> None:
+    """delete_run supprime un run terminé, refuse un run « running »."""
+    from pyea.storage.storage_training_runs import delete_run
+
+    init_db()
+    create_run("run-fini", "couleuvre_v0_1", "EURUSD", "H1", 3, {})
+    finish_run("run-fini", "completed")
+    create_run("run-vivant", "couleuvre_v0_1", "EURUSD", "H1", 3, {})
+
+    assert delete_run("run-fini") == "completed"
+    # Un run encore « running » n'est PAS supprimé : son job peut encore
+    # écrire ses artefacts (l'API répond 409, on annule d'abord).
+    assert delete_run("run-vivant") == "running"
+    assert delete_run("inconnu") is None
+    assert {run["id"] for run in list_runs()} == {"run-vivant"}
+
+
 def test_repere_d_equite_du_jour_est_stable(tmp_db: Path) -> None:
     """Le repère d'équité de début de journée est posé UNE fois, puis relu.
 

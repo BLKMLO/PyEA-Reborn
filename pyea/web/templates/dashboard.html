@@ -25,6 +25,18 @@
             <button id="trading-toggle" class="hidden rounded px-3 py-0.5 text-xs font-semibold"></button>
           </div>
           <div class="flex shrink-0 items-center gap-2">
+            <!-- Unité de temps : le serveur ne sert que du M1, l'agrégation
+                 M5…D1 est faite côté client par charts.js (choix mémorisé). -->
+            <select id="chart-timeframe" title="Unité de temps du graphique"
+                    class="rounded border border-slate-600 bg-slate-900 px-1.5 py-0.5 text-[11px] text-slate-300">
+              <option value="M1">M1</option>
+              <option value="M5">M5</option>
+              <option value="M15">M15</option>
+              <option value="M30">M30</option>
+              <option value="H1">H1</option>
+              <option value="H4">H4</option>
+              <option value="D1">D1</option>
+            </select>
             <button id="chart-fit" type="button" title="Réinitialiser le zoom sur les dernières bougies"
                     class="rounded border border-slate-600 px-2 py-0.5 text-[11px] text-slate-300 hover:bg-slate-700">
               Recadrer

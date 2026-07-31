@@ -156,6 +156,29 @@ def fail_orphan_runs() -> int:
         return len(orphans)
 
 
+def delete_run(run_id: str) -> str | None:
+    """Supprime la ligne d'un run terminé. Retourne son statut :
+
+    - ``None`` si le run est inconnu (l'API répond 404) ;
+    - ``"running"`` si le run est encore en cours — la ligne N'EST PAS
+      supprimée (son job peut encore écrire ses artefacts ; l'API répond
+      409 et l'utilisateur annule d'abord l'entraînement) ;
+    - le statut du run supprimé sinon.
+
+    La suppression des artefacts disque (``data/models/<run_id>``) relève de
+    la couche API, qui connaît ``models_dir``.
+    """
+    with get_session() as session:
+        run = session.get(TrainingRun, run_id)
+        if run is None:
+            return None
+        status = run.status
+        if status != "running":
+            session.delete(run)
+            session.commit()
+        return status
+
+
 def make_run_id(strategy_name: str) -> str:
     """Identifiant lisible et trié chronologiquement : <strategie>-<horodatage>."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
