@@ -14,8 +14,11 @@
       <h2 class="text-xs font-semibold uppercase tracking-wide text-slate-400">Entraînement (walk-forward)</h2>
 
       <label class="text-xs text-slate-400">Symbole
-        <select id="tr-symbol" class="mt-1 w-full rounded bg-slate-700 px-2 py-1.5 text-sm text-slate-100"></select>
+        <select id="tr-symbol" class="mt-1 w-full rounded bg-slate-700 px-2 py-1.5 text-sm text-slate-100 disabled:opacity-50"></select>
       </label>
+      <p id="tr-symbol-note" class="-mt-2 hidden text-[11px] text-sky-400">
+        Tous les actifs ayant un historique — modèle unique mutualisé.
+      </p>
       <label class="text-xs text-slate-400">Timeframe
         <select id="tr-timeframe" class="mt-1 w-full rounded bg-slate-700 px-2 py-1.5 text-sm text-slate-100"></select>
       </label>
@@ -56,10 +59,11 @@
       </div>
 
       <p class="text-[11px] leading-relaxed text-slate-500">
-        Un modèle par actif, entraîné manuellement. La métrique qui compte
-        est l'<b>out-of-sample</b> : comparez l'<b>AUC IS</b> (in-sample,
-        mémorisation) à l'<b>AUC OOS</b> (skill réel, ≈ 0,5 = aucun pouvoir
-        prédictif) — un grand écart trahit le surapprentissage.
+        <b>couleuvre_v0_2</b> : UN modèle unique mutualisé sur tous les
+        actifs. <b>couleuvre_v0_1</b> (figée) : un modèle par actif. La
+        métrique qui compte est l'<b>out-of-sample</b> : comparez l'<b>AUC IS</b>
+        (in-sample, mémorisation) à l'<b>AUC OOS</b> (skill réel, ≈ 0,5 = aucun
+        pouvoir prédictif) — un grand écart trahit le surapprentissage.
       </p>
     </aside>
 
@@ -96,6 +100,23 @@
                 </tr>
               </thead>
               <tbody id="tr-folds-body"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Ventilation par actif (runs poolés « modèle unique » seulement). -->
+        <div id="tr-by-symbol" class="hidden rounded-lg bg-slate-800 p-3">
+          <h3 class="mb-2 text-sm font-medium text-slate-300">Par actif (out-of-sample agrégé)</h3>
+          <div class="max-h-56 overflow-y-auto">
+            <table class="w-full text-left text-xs">
+              <thead class="sticky top-0 bg-slate-800 text-slate-400">
+                <tr>
+                  <th class="py-1 pr-2">Actif</th><th class="pr-2">Trades</th>
+                  <th class="pr-2">P&L OOS</th><th class="pr-2">Taux gain</th>
+                  <th>Profit factor</th>
+                </tr>
+              </thead>
+              <tbody id="tr-by-symbol-body"></tbody>
             </table>
           </div>
         </div>

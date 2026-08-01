@@ -7,6 +7,7 @@ l'enregistrement — ajouter une stratégie = ajouter un fichier + une ligne ici
 """
 
 from pyea.strategies import strategy_couleuvre_v0_1  # noqa: F401
+from pyea.strategies import strategy_couleuvre_v0_2  # noqa: F401
 from pyea.strategies.strategy_base import Strategy
 from pyea.strategies.strategy_registry import get_strategy, register_strategy
 

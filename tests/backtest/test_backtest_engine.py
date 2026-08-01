@@ -128,8 +128,13 @@ def test_strategie_muette_zero_trade() -> None:
     assert result.stats["trades"] == 0
     assert result.stats["win_rate"] is None
     assert result.bars == 3
-    # La courbe d'équité existe même sans trade (plate à 0).
-    assert all(value == 0.0 for _, value in result.equity_curve)
+    # La courbe d'équité existe même sans trade : plate à la VALEUR DU COMPTE
+    # (le capital initial, pas 0 — c'est une courbe de valeur, pas de P&L).
+    capital = result.stats["initial_capital"]
+    assert all(value == capital for _, value in result.equity_curve)
+    assert result.stats["final_equity"] == capital
+    assert result.stats["return_pct"] == 0.0
+    assert result.stats["max_drawdown_pct"] == 0.0
     # Les métriques avancées existent (None faute de trade), jamais absentes.
     for key in ("sharpe_ratio", "sqn", "profit_factor"):
         assert key in result.stats and result.stats[key] is None
@@ -157,6 +162,56 @@ def test_metriques_avancees_backtrader() -> None:
 def test_courbe_equite_bornee() -> None:
     result = _run({}, [1.0] * 3000)
     assert len(result.equity_curve) <= 502  # MAX_EQUITY_POINTS + extrémités
+
+
+# --- Capital de départ et métriques de compte ------------------------------
+# Le backtest tourne sur un capital réel (backtest.initial_capital) : la
+# courbe d'équité est la VALEUR DU COMPTE, et les métriques de compte
+# (rendement %, drawdown %) s'y rapportent.
+
+
+def test_courbe_equite_part_du_capital_initial() -> None:
+    result = _run({}, [1.0, 1.1, 1.2])
+    premier = result.equity_curve[0][1]
+    assert premier == pytest.approx(result.stats["initial_capital"])
+
+
+def test_metriques_de_compte_exactes_sur_aller_retour() -> None:
+    # Capital 10 000, achat à 1.0, sortie à 1.5, taille = max_position_size :
+    # capital final = 10 000 + 0.5 × taille, rendement = P&L / capital.
+    capital = 10000.0
+    engine = BacktestEngine(
+        ScriptedStrategy({0: SignalAction.ENTER_LONG, 2: SignalAction.EXIT}),
+        RiskManager(get_settings()),
+        initial_capital=capital,
+    )
+    result = engine.run("EURUSD", _frame([1.0, 1.2, 1.5, 1.4]), "H1")
+    size = get_settings().risk_max_position_size
+    stats = result.stats
+    assert stats["initial_capital"] == capital
+    assert stats["final_equity"] == pytest.approx(capital + 0.5 * size)
+    assert stats["return_pct"] == pytest.approx(round(0.5 * size / capital, 5))
+    # La quantité tradée est la taille RÉELLE (plus de re-scaling post-hoc).
+    assert result.trades[0].quantity == size
+
+
+def test_drawdown_absolu_et_pourcentage() -> None:
+    # Long à 1.0 (bougie 0), le cours monte à 2.0 puis revient à 1.0 (sortie) :
+    # pic = capital + 1 × taille, creux = capital → DD = taille, en absolu et
+    # en fraction du pic.
+    capital = 10000.0
+    engine = BacktestEngine(
+        ScriptedStrategy({0: SignalAction.ENTER_LONG, 2: SignalAction.EXIT}),
+        RiskManager(get_settings()),
+        initial_capital=capital,
+    )
+    result = engine.run("EURUSD", _frame([1.0, 2.0, 1.0, 1.0]), "H1")
+    size = get_settings().risk_max_position_size
+    pic = capital + 1.0 * size
+    assert result.stats["max_drawdown"] == pytest.approx(round(1.0 * size, 5))
+    assert result.stats["max_drawdown_pct"] == pytest.approx(
+        round(1.0 * size / pic, 5)
+    )
 
 
 def _run_barrier(strategy: BarrierStrategy, frame: pd.DataFrame):

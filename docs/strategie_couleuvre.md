@@ -1,4 +1,11 @@
-# Couleuvre_v0.1 — Spécification de la stratégie LightGBM
+# Couleuvre — Spécification des stratégies LightGBM
+
+> **2026-07-31 — v0.2 : la décision « un modèle par actif » est RÉVOQUÉE**
+> (demande utilisateur). `couleuvre_v0_2` entraîne **UN modèle unique
+> mutualisé sur tous les actifs** — voir la [section v0.2](#couleuvre_v02--modèle-unique-multi-actifs).
+> La section v0.1 ci-dessous reste la référence de la version figée.
+
+# Couleuvre_v0.1 — Spécification de la stratégie LightGBM (figée)
 
 > Source : ébauche fournie par l'utilisateur (2026-07-19), rédigée en
 > collaboration avec une IA — **imparfaite et non figée**. Les annotations
@@ -28,7 +35,8 @@
 - **Validation** : walk-forward — ✅ déjà en place
   (`pyea/training/training_walkforward.py`, fenêtre expansive).
 - **Modèle** : ✅ **tranché — un LightGBM par actif** (décision
-  utilisateur 2026-07-19). Conséquence directe sur les features : module
+  utilisateur 2026-07-19, **révoquée le 2026-07-31 → v0.2 mutualisée**).
+  Conséquence directe sur les features : module
   mono-symbole, pas de feature « classe d'actif » (inutile) ni cross-asset
   (v2). Le stockage par run (`data/models/<run>/`) accueillera un modèle
   par symbole.
@@ -120,3 +128,62 @@ Entraînement EST le test**. Pour une paire :
 ⚠ Validé jusqu'ici sur historique **synthétique local** (Dukascopy bloqué
 en sandbox) : le pipeline est correct et sans fuite (prouvé sur bruit pur),
 mais les taux de gain réels ne se jugeront que sur de vraies données.
+
+---
+
+# Couleuvre_v0.2 — Modèle unique multi-actifs
+
+> Ajout du 2026-07-31 (`pyea/strategies/strategy_couleuvre_v0_2.py`,
+> classe `CouleuvreV02`). La règle de versionnement du projet est respectée :
+> v0.1 est **gelée**, toute évolution de définition vit ici.
+
+## Pourquoi (diagnostic v0.1)
+
+Le walk-forward v0.1 sur EURUSD H1 a tranché honnêtement : **pas d'edge
+exploitable** avec un modèle par actif — AUC IS 0,94 / AUC OOS 0,52,
+probas décalibrées déclenchant sur > 60 % des bougies, coût du spread
+supérieur au micro-edge. Trois leviers retenus, par ordre d'impact :
+
+1. **Mutualiser les données** : chaque actif seul a peu d'historique ; le
+   pooling multi-actifs multiplie les échantillons d'entraînement et donne
+   au modèle de quoi apprendre des régimes plutôt que du bruit.
+2. **Timeframe plus long** : H4 conseillé — moins de trades, spread
+   relativement plus petit face à l'amplitude visée.
+3. **Seuils plus sélectifs** : 0.60 / 0.40 (contre 0.55 / 0.45) — moins de
+   trades, de meilleure conviction, coûts proportionnellement plus faibles.
+
+## Changements de définition vs v0.1
+
+- **UN LightGBM pour tous les actifs** : features + labels calculés
+  **symbole par symbole** (jamais de concaténation des OHLCV bruts — les
+  fenêtres glissantes ne doivent pas déborder d'un actif sur l'autre),
+  puis concaténation des seuls jeux étiquetés. Les 34 features v0.1 sont
+  réutilisées telles quelles (déjà sans échelle : returns, déviations
+  relatives, ratios).
+- **Feature d'identité `symbol`** (35e feature) : catégorielle native
+  LightGBM. Les codes entiers dépendent de la liste ordonnée des
+  catégories — elle est figée à l'entraînement, persistée dans
+  `features.json` (`symbol_categories`) et reconstruite à l'identique à
+  chaque prédiction (`pd.Categorical.from_codes` ; symbole inconnu → code
+  −1 = valeur manquante).
+- **Early stopping causal** : la queue (15 %) de CHAQUE symbole part en
+  validation ; train et validation sont concaténés séparément (tri
+  positionnel stable — un `.loc` sur les timestamps dupliqués entre actifs
+  expanserait les lignes).
+- **Entraînement** : page Entraînement, `symbols` omis = tous les actifs
+  ayant un historique ; run enregistré sous la sentinelle **`ALL`** ;
+  `resolve_live_model` sert le modèle poolé à tous les symboles (repli
+  après le run propre au symbole). Le walk-forward poolé découpe sur la
+  plage commune, entraîne UN modèle par pli et évalue chaque actif
+  séparément, avec agrégation honnête (PF / taux de gain sur TOUS les
+  trades, jamais moyennés ; Sharpe/SQN par pli laissés à None — non
+  fusionnables entre actifs) et ventilation par actif (`oos_by_symbol`).
+- Inchangé : barrières 1,5 × ATR14, horizon 5 j, clôture avant week-end,
+  coûts mesurés (spread médian + commission).
+
+## Comment juger v0.2
+
+Même discipline que v0.1 : **décider sur l'out-of-sample uniquement** —
+AUC OOS par pli face à l'AUC IS, profit factor et P&L OOS nets de coûts,
+et désormais la **ventilation par actif** pour repérer les actifs qui
+portent (ou plombent) l'agrégat.

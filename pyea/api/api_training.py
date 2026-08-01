@@ -23,19 +23,22 @@ from pyea.core.core_logging import get_logger
 from pyea.data.data_history_downloader import load_history, resample_history
 from pyea.risk.risk_manager import RiskManager
 from pyea.storage.storage_training_runs import (
-    create_run, delete_run, finish_run, list_runs, make_run_id,
+    POOLED_RUN_SYMBOL, create_run, delete_run, finish_run, list_runs, make_run_id,
 )
 from pyea.strategies.strategy_registry import get_strategy
-from pyea.training import job_manager, run_walkforward
+from pyea.training import job_manager, run_walkforward, run_walkforward_pooled
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/api/training", tags=["training"])
 
 
 class TrainingRunRequest(BaseModel):
-    symbol: str
+    # ``symbols`` = liste d'actifs (poolé si plusieurs) ; ``None`` = TOUS
+    # les actifs ayant un historique local — le cas voulu pour un modèle
+    # unique (couleuvre_v0_2).
+    symbols: list[str] | None = None
     timeframe: str = "H1"
-    strategy: str = "couleuvre_v0_1"
+    strategy: str = "couleuvre_v0_2"
     folds: int = Field(default=4, ge=1, le=20)
     start: date | None = None
     end: date | None = None
@@ -47,6 +50,18 @@ class TrainingRunRequest(BaseModel):
                 f"Période invalide : début ({self.start}) postérieur à la fin ({self.end})."
             )
         return self
+
+
+def _symbols_with_history(data_dir: Path) -> list[str]:
+    """Actifs ayant au moins un fichier d'historique M1 local."""
+    if not data_dir.is_dir():
+        return []
+    return sorted(
+        symbol_dir.name
+        for symbol_dir in data_dir.iterdir()
+        if symbol_dir.is_dir()
+        and list(symbol_dir.glob(f"{symbol_dir.name}_m1_*.parquet"))
+    )
 
 
 @router.post("/run")
@@ -66,19 +81,43 @@ async def start_training(request: TrainingRunRequest) -> dict[str, Any]:
         strategy_cls = get_strategy(request.strategy)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    # Seule vérification synchrone sur les données : le symbole a un
-    # historique local (erreur immédiate et actionnable, sans rien charger).
+
+    # Cibles : la liste demandée, ou TOUS les actifs ayant un historique.
+    # Seule vérification synchrone sur les données : l'historique local existe
+    # (erreur immédiate et actionnable, sans rien charger).
     data_dir = Path(settings.history_data_dir)
-    if not list((data_dir / request.symbol).glob(f"{request.symbol}_m1_*.parquet")):
+    symbols = request.symbols or _symbols_with_history(data_dir)
+    if not symbols:
         raise HTTPException(
             status_code=404,
-            detail=f"Aucun historique pour {request.symbol} dans {data_dir} — "
+            detail=f"Aucun historique dans {data_dir} — "
                    "lancer `python download_history.py` d'abord.",
+        )
+    missing = [
+        s for s in symbols
+        if not list((data_dir / s).glob(f"{s}_m1_*.parquet"))
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Aucun historique pour {', '.join(missing)} dans {data_dir} — "
+                   "lancer `python download_history.py` d'abord.",
+        )
+    pooled = len(symbols) > 1
+    if pooled and not strategy_cls().model_definition().get("pooled"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{request.strategy} s'entraîne par actif : passer un seul "
+                   "symbole, ou choisir une stratégie mutualisée (couleuvre_v0_2).",
         )
 
     run_id = make_run_id(request.strategy)
     params = request.model_dump(mode="json")
-    create_run(run_id, request.strategy, request.symbol, request.timeframe,
+    params["symbols"] = symbols  # liste RÉSOLUE (les actifs effectivement visés)
+    # Un run poolé est enregistré sous la sentinelle ALL : le modèle est unique,
+    # il n'appartient à aucun actif en particulier.
+    run_symbol = POOLED_RUN_SYMBOL if pooled else symbols[0]
+    create_run(run_id, request.strategy, run_symbol, request.timeframe,
                request.folds, params)
     artifacts_dir = Path(settings.models_dir) / run_id
     risk_manager = RiskManager(settings)
@@ -86,28 +125,53 @@ async def start_training(request: TrainingRunRequest) -> dict[str, Any]:
 
     def target(progress, cancelled) -> dict[str, Any]:
         try:
-            progress({"phase": "load", "message": "Chargement de l'historique…"})
             start = pd.Timestamp(request.start, tz="UTC") if request.start else None
             end = pd.Timestamp(request.end, tz="UTC") if request.end else None
-            frame = load_history(data_dir, request.symbol, start, end)
-            frame = resample_history(frame, request.timeframe)
-            if len(frame) < request.folds * 20:
+            frames: dict[str, pd.DataFrame] = {}
+            for symbol in symbols:
+                progress({"phase": "load",
+                          "message": f"Chargement de l'historique {symbol}…"})
+                frame = load_history(data_dir, symbol, start, end)
+                frame = resample_history(frame, request.timeframe)
+                if len(frame) >= request.folds * 20:
+                    frames[symbol] = frame
+                else:
+                    logger.warning(
+                        "Entraînement : %s écarté (historique trop court : %d "
+                        "bougies pour %d plis).", symbol, len(frame), request.folds,
+                    )
+            if not frames or (pooled and len(frames) < 2):
                 raise ValueError(
-                    f"Historique trop court ({len(frame)} bougies) pour "
-                    f"{request.folds} plis."
+                    "Historique trop court pour "
+                    f"{request.folds} plis sur les actifs demandés."
                 )
-            report = run_walkforward(
-                strategy_factory=strategy_cls,
-                risk_manager=risk_manager,
-                symbol=request.symbol,
-                frame=frame,
-                timeframe=request.timeframe,
-                n_folds=request.folds,
-                artifacts_dir=artifacts_dir,
-                progress=progress,
-                cancelled=cancelled,
-                commission_per_unit=settings.costs_commission_per_unit,
-            )
+            if pooled:
+                report = run_walkforward_pooled(
+                    strategy_factory=strategy_cls,
+                    risk_manager=risk_manager,
+                    frames=frames,
+                    timeframe=request.timeframe,
+                    n_folds=request.folds,
+                    artifacts_dir=artifacts_dir,
+                    progress=progress,
+                    cancelled=cancelled,
+                    commission_per_unit=settings.costs_commission_per_unit,
+                    initial_capital=settings.backtest_initial_capital,
+                )
+            else:
+                report = run_walkforward(
+                    strategy_factory=strategy_cls,
+                    risk_manager=risk_manager,
+                    symbol=symbols[0],
+                    frame=frames[symbols[0]],
+                    timeframe=request.timeframe,
+                    n_folds=request.folds,
+                    artifacts_dir=artifacts_dir,
+                    progress=progress,
+                    cancelled=cancelled,
+                    commission_per_unit=settings.costs_commission_per_unit,
+                    initial_capital=settings.backtest_initial_capital,
+                )
         except Exception:
             finish_run(run_id, "failed")
             raise
@@ -117,7 +181,7 @@ async def start_training(request: TrainingRunRequest) -> dict[str, Any]:
 
     job = job_manager.start(target, loop)
     logger.info("Entraînement %s lancé (job %s) : %s %s, %d plis.",
-                run_id, job.id, request.symbol, request.timeframe, request.folds)
+                run_id, job.id, ",".join(symbols), request.timeframe, request.folds)
     return {"job_id": job.id, "run_id": run_id}
 
 

@@ -117,6 +117,7 @@ def run_backtest(request: BacktestRunRequest) -> dict[str, Any]:
     engine = BacktestEngine(
         strategy_cls(), RiskManager(settings),
         commission_per_unit=settings.costs_commission_per_unit,
+        initial_capital=settings.backtest_initial_capital,
     )
     result = engine.run(
         request.symbol, frame, request.timeframe,

@@ -7,6 +7,10 @@
 """
 
 from pyea.training.training_jobs import job_manager
-from pyea.training.training_walkforward import run_walkforward, split_walkforward
+from pyea.training.training_walkforward import (
+    run_walkforward,
+    run_walkforward_pooled,
+    split_walkforward,
+)
 
-__all__ = ["job_manager", "run_walkforward", "split_walkforward"]
+__all__ = ["job_manager", "run_walkforward", "run_walkforward_pooled", "split_walkforward"]

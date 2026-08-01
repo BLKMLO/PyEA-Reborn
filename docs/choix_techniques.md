@@ -76,8 +76,11 @@ développe le raisonnement pour celles qui structurent le projet.
     (test de non-régression `test_pas_de_fuite_pnl_nul_sur_bruit`). D'où la
     colonne « AUC IS » affichée en regard du taux de gain OOS par pli :
     l'écart entre les deux est le diagnostic direct de surapprentissage.
-  - *Un modèle par actif, entraîné manuellement* : chaque paire se forme
-    via la page **Entraînement** (`/training`, un symbole par run) ; le
+  - *Un modèle unique mutualisé (v0_2), entraîné manuellement* : depuis le
+    2026-07-31, `couleuvre_v0_2` entraîne UN LightGBM sur tous les actifs
+    (feature `symbol` catégorielle, run enregistré sous « ALL ») — la
+    décision initiale « un modèle par actif » (v0_1, figée) est révoquée
+    (cf. `docs/strategie_couleuvre.md`). Le
     walk-forward out-of-sample de cette page EST le test de qualité de la
     paire.
 

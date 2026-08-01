@@ -64,6 +64,12 @@ costs:
   # en forex retail.
   commission_per_unit: 0.0
 
+backtest:
+  # Capital de départ du compte simulé (devise du compte). La courbe d'équité
+  # est la VALEUR DU COMPTE : elle part de ce capital ; return_pct et le
+  # drawdown en % s'y rapportent. La taille tradée reste risk.max_position_size.
+  initial_capital: 10000.0
+
 history:
   # Données historiques M1 (Dukascopy) pour le backtest — voir
   # download_history.py. Année de départ réglable (2010 = défaut voulu).

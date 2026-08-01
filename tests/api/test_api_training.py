@@ -12,9 +12,8 @@ from pyea.config.config_settings import get_settings
 from pyea.data.data_history_downloader import year_file_path
 
 
-@pytest.fixture
-def training_env(tmp_path: Path):
-    """Historique synthétique + base et artefacts isolés."""
+def _write_history(root: Path, symbol: str) -> None:
+    """3 jours de M1 synthétique pour un symbole (≈72 bougies H1)."""
     index = pd.date_range("2024-01-01", periods=3 * 1440, freq="1min", tz="UTC")
     closes = [1.08 + 0.0001 * (i % 40) for i in range(len(index))]
     frame = pd.DataFrame(
@@ -22,9 +21,15 @@ def training_env(tmp_path: Path):
          "bid_close": closes, "volume": [1.0] * len(index)},
         index=index,
     )
-    target = year_file_path(tmp_path / "history", "EURUSD", 2024)
-    target.parent.mkdir(parents=True)
+    target = year_file_path(root, symbol, 2024)
+    target.parent.mkdir(parents=True, exist_ok=True)
     frame.to_parquet(target)
+
+
+@pytest.fixture
+def training_env(tmp_path: Path):
+    """Historique synthétique + base et artefacts isolés."""
+    _write_history(tmp_path / "history", "EURUSD")
 
     settings = get_settings()
     saved = (settings.history_data_dir, settings.models_dir, settings.database_url)
@@ -49,7 +54,7 @@ def test_entrainement_complet(training_env: Path) -> None:
     with TestClient(create_app()) as client:
         response = client.post(
             "/api/training/run",
-            json={"symbol": "EURUSD", "timeframe": "H1", "folds": 3},
+            json={"symbols": ["EURUSD"], "timeframe": "H1", "folds": 3},
         )
         assert response.status_code == 200
         payload = response.json()
@@ -140,13 +145,13 @@ def test_runs_orphelins_marques_failed_au_demarrage(training_env: Path) -> None:
 
 def test_erreurs_entrainement(training_env: Path) -> None:
     with TestClient(create_app()) as client:
-        no_data = client.post("/api/training/run", json={"symbol": "GBPUSD"})
+        no_data = client.post("/api/training/run", json={"symbols": ["GBPUSD"]})
         # Historique trop court : détecté APRÈS le chargement, qui vit dans
         # le job (le POST répond tout de suite) → le job échoue proprement
         # avec un message actionnable, et le run est historisé « failed ».
         too_short = client.post(
             "/api/training/run",
-            json={"symbol": "EURUSD", "timeframe": "D1", "folds": 20},
+            json={"symbols": ["EURUSD"], "timeframe": "D1", "folds": 20},
         )
         assert too_short.status_code == 200
         job = _wait_for_job(client, too_short.json()["job_id"])
@@ -157,3 +162,38 @@ def test_erreurs_entrainement(training_env: Path) -> None:
     assert "trop court" in job["error"]
     assert runs[0]["status"] == "failed"
     assert unknown_job.status_code == 404
+
+
+# --- Mode poolé (modèle unique multi-actifs) -------------------------------
+
+
+def test_entrainement_poole_tous_les_actifs(training_env: Path) -> None:
+    """``symbols`` omis = TOUS les actifs avec historique ; le run est
+    enregistré sous la sentinelle « ALL » et le rapport liste les actifs."""
+    _write_history(training_env / "history", "GBPUSD")
+    with TestClient(create_app()) as client:
+        response = client.post("/api/training/run", json={"folds": 2})
+        assert response.status_code == 200
+        payload = response.json()
+        job = _wait_for_job(client, payload["job_id"])
+        runs = client.get("/api/training/runs").json()["runs"]
+
+    assert job["status"] == "completed"
+    assert job["result"]["symbol"] == "ALL"
+    assert job["result"]["symbols"] == ["EURUSD", "GBPUSD"]
+    assert "oos_by_symbol" in job["result"]
+    assert runs[0]["symbol"] == "ALL"
+    # La stratégie par défaut est désormais la mutualisée.
+    assert runs[0]["strategy"] == "couleuvre_v0_2"
+
+
+def test_strategie_mono_actif_refuse_le_pool(training_env: Path) -> None:
+    """couleuvre_v0_1 s'entraîne par actif : plusieurs symboles → 400 clair."""
+    _write_history(training_env / "history", "GBPUSD")
+    with TestClient(create_app()) as client:
+        response = client.post(
+            "/api/training/run",
+            json={"symbols": ["EURUSD", "GBPUSD"], "strategy": "couleuvre_v0_1"},
+        )
+    assert response.status_code == 400
+    assert "par actif" in response.json()["detail"]

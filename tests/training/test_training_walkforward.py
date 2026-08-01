@@ -110,3 +110,110 @@ def test_run_walkforward_annulation(tmp_path: Path) -> None:
     )
     assert report["cancelled"] is True
     assert report["folds"] == []
+
+
+# --- Mode poolé (modèle unique multi-actifs) -------------------------------
+
+
+def _frame_decale(bars: int, start: str, pente: float = 0.001) -> pd.DataFrame:
+    index = pd.date_range(start, periods=bars, freq="1h", tz="UTC")
+    closes = [1.0 + pente * i for i in range(bars)]
+    return pd.DataFrame({"bid_close": closes}, index=index)
+
+
+def test_split_frames_plage_commune() -> None:
+    """La découpe poolée se fait sur la plage commune : un actif qui démarre
+    plus tard est tranché aux MÊMES timestamps que les autres."""
+    from pyea.training.training_walkforward import _split_frames
+
+    frames = {
+        "AAA": _frame_decale(200, "2024-01-01"),
+        "BBB": _frame_decale(150, "2024-01-03"),  # démarre 2 jours plus tard
+    }
+    folds = _split_frames(frames, n_folds=2)
+    assert len(folds) == 2
+    for train, test in folds:
+        # Plage commune : rien avant le début de BBB.
+        assert train["AAA"].index[0] >= frames["BBB"].index[0]
+        # Mêmes bornes temporelles pour les deux actifs.
+        assert train["AAA"].index[-1] < test["AAA"].index[0]
+        assert test["AAA"].index[0] == test["BBB"].index[0]
+
+
+def test_split_frames_actif_hors_plage_ecarte() -> None:
+    from pyea.training.training_walkforward import _split_frames
+
+    frames = {
+        "AAA": _frame_decale(200, "2024-01-01"),
+        "BBB": _frame_decale(50, "2024-01-01"),
+        "CCC": _frame_decale(50, "2025-06-01"),  # hors plage commune
+    }
+    folds = _split_frames(frames, n_folds=2)
+    for train, test in folds:
+        assert "CCC" not in train and "CCC" not in test
+
+
+def test_run_walkforward_pooled_structure(tmp_path: Path) -> None:
+    """Run poolé : un seul rapport sous « ALL », plis ventilés par actif,
+    agrégats par actif honnêtes au niveau du rapport."""
+    from pyea.strategies.strategy_registry import get_strategy
+    from pyea.training import run_walkforward_pooled
+
+    frames = {"AAA": _frame(200), "BBB": _frame_decale(200, "2024-01-01", pente=-0.001)}
+    report = run_walkforward_pooled(
+        strategy_factory=get_strategy("couleuvre_v0_2"),
+        risk_manager=RiskManager(get_settings()),
+        frames=frames,
+        timeframe="H1",
+        n_folds=3,
+        artifacts_dir=tmp_path / "run",
+        progress=lambda payload: None,
+        cancelled=lambda: False,
+    )
+    assert report["symbol"] == "ALL"
+    assert report["symbols"] == ["AAA", "BBB"]
+    assert len(report["folds"]) == 3
+    for fold in report["folds"]:
+        # Ventilation par actif présente (même à 0 trade) ; Sharpe/SQN
+        # honnêtement None en poolé (non fusionnables).
+        assert set(fold["per_symbol"]) == {"AAA", "BBB"}
+        assert fold["test_stats"]["sharpe_ratio"] is None
+    assert set(report["oos_by_symbol"]) == {"AAA", "BBB"}
+    for stats in report["oos_by_symbol"].values():
+        assert set(stats) == {"trades", "total_pnl", "win_rate", "profit_factor"}
+    assert (tmp_path / "run" / "metadata.json").exists()
+
+
+def test_run_walkforward_pooled_exige_deux_actifs(tmp_path: Path) -> None:
+    from pyea.strategies.strategy_registry import get_strategy
+    from pyea.training import run_walkforward_pooled
+
+    with pytest.raises(ValueError, match="au moins deux actifs"):
+        run_walkforward_pooled(
+            strategy_factory=get_strategy("couleuvre_v0_2"),
+            risk_manager=RiskManager(get_settings()),
+            frames={"SEUL": _frame(200)},
+            timeframe="H1",
+            n_folds=2,
+            artifacts_dir=tmp_path / "run",
+            progress=lambda payload: None,
+            cancelled=lambda: False,
+        )
+
+
+def test_report_ventilation_par_actif_honnete() -> None:
+    """La ventilation par actif agrège comme le global : taux de gain et PF
+    sur TOUS les trades de l'actif (jamais de moyenne de ratios)."""
+    from pyea.training.training_walkforward import _report
+
+    report = _report(
+        "ALL", "H1", [], [], [1.0, -1.0], cancelled=False,
+        symbols=["AAA", "BBB"],
+        by_symbol_pnls={"AAA": [1.0, 1.0, -1.0], "BBB": [-1.0, -1.0]},
+    )
+    par_actif = report["oos_by_symbol"]
+    assert par_actif["AAA"]["trades"] == 3
+    assert par_actif["AAA"]["win_rate"] == round(2 / 3, 4)
+    assert par_actif["AAA"]["profit_factor"] == 2.0
+    assert par_actif["BBB"]["win_rate"] == 0.0
+    assert par_actif["BBB"]["profit_factor"] == 0.0  # aucun gain → PF nul

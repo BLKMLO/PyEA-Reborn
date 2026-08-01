@@ -25,6 +25,7 @@ const {
 let currentJobId = null;
 let pollTimer = null;
 let oosEquityChart = null;
+let currentDef = null; // définition du modèle de la stratégie choisie
 
 // --- Formulaire + définition du modèle -------------------------------------
 
@@ -40,22 +41,35 @@ async function loadDatasets() {
   }
   fillSelect("tr-symbol", data.datasets.map(d => d.symbol));
   fillSelect("tr-timeframe", data.timeframes, "H1");
-  fillSelect("tr-strategy", data.strategies);
+  // La stratégie mutualisée (modèle unique) est le défaut depuis v0_2.
+  fillSelect("tr-strategy", data.strategies, "couleuvre_v0_2");
   message.textContent = "";
+}
+
+// Stratégie « pooled » (modèle unique multi-actifs) : le choix du symbole
+// n'a plus de sens — le run vise TOUS les actifs ayant un historique.
+function updateSymbolField() {
+  const pooled = !!(currentDef && currentDef.pooled);
+  document.getElementById("tr-symbol").disabled = pooled;
+  document.getElementById("tr-symbol-note").classList.toggle("hidden", !pooled);
 }
 
 const DEF_LABELS = {
   n_features: v => ["Features", v],
+  pooled: v => ["Modèle", v ? "unique (tous actifs)" : "par actif"],
   barrier_atr_mult: v => ["Barrières", `±${v} · ATR`],
   max_hold_days: v => ["Horizon max", `${v} j`],
+  recommended_timeframe: v => ["Timeframe conseillé", v],
   objective: v => ["Objectif", v],
 };
 
 async function loadModelDefinition(strategy) {
   const container = document.getElementById("tr-model-def");
   const response = await fetch(`/api/training/definition/${strategy}`);
-  if (!response.ok) { container.innerHTML = ""; return; }
+  if (!response.ok) { container.innerHTML = ""; currentDef = null; updateSymbolField(); return; }
   const def = (await response.json()).definition;
+  currentDef = def || null;
+  updateSymbolField();
   if (!def) {
     container.innerHTML = `<div class="text-slate-500">Aucune définition exposée.</div>`;
     return;
@@ -84,12 +98,15 @@ async function runTraining() {
   // répondre (plusieurs secondes sur un gros M1) — sans cela, le clic
   // semblait ne rien faire.
   setProgress({ message: "Chargement de l'historique…" });
+  const pooled = !!(currentDef && currentDef.pooled);
   const body = {
-    symbol: document.getElementById("tr-symbol").value,
     timeframe: document.getElementById("tr-timeframe").value,
     strategy: document.getElementById("tr-strategy").value,
     folds: Math.min(20, Math.max(1, parseInt(document.getElementById("tr-folds").value, 10) || 4)),
   };
+  // Modèle unique : pas de `symbols` → le serveur vise TOUS les actifs
+  // ayant un historique. Modèle par actif : le symbole choisi, en liste.
+  if (!pooled) body.symbols = [document.getElementById("tr-symbol").value];
   const start = document.getElementById("tr-start").value;
   const end = document.getElementById("tr-end").value;
   if (start) body.start = start;
@@ -110,7 +127,7 @@ async function runTraining() {
       return;
     }
     currentJobId = (await response.json()).job_id;
-    showToast(`Entraînement ${body.symbol} lancé…`, "info");
+    showToast(`Entraînement ${pooled ? "tous actifs" : body.symbols[0]} lancé…`, "info");
   } catch (error) {
     message.textContent = `Erreur réseau : ${error.message}`;
     showToast(`Erreur réseau : ${error.message}`, "error");
@@ -297,6 +314,25 @@ function renderTraining(report) {
       <td class="text-slate-400">${num2(fold.test_stats.sqn)}</td>
     </tr>`;
   }).join("");
+
+  // Ventilation par actif (runs poolés « modèle unique ») : même agrégation
+  // honnête que le global — jamais de moyenne de ratios.
+  const bySymbolBlock = document.getElementById("tr-by-symbol");
+  const bySymbol = report.oos_by_symbol || null;
+  if (bySymbol && Object.keys(bySymbol).length) {
+    bySymbolBlock.classList.remove("hidden");
+    document.getElementById("tr-by-symbol-body").innerHTML =
+      Object.entries(bySymbol).map(([symbol, stats]) => `
+        <tr class="border-t border-slate-700/60">
+          <td class="py-1 pr-2 font-semibold">${symbol}</td>
+          <td class="pr-2">${stats.trades}</td>
+          <td class="pr-2 ${stats.total_pnl >= 0 ? "text-emerald-400" : "text-red-400"}">${stats.total_pnl}</td>
+          <td class="pr-2">${stats.win_rate === null ? "—" : (stats.win_rate * 100).toFixed(1) + " %"}</td>
+          <td>${num2(stats.profit_factor)}</td>
+        </tr>`).join("");
+  } else {
+    bySymbolBlock.classList.add("hidden");
+  }
 }
 
 async function loadRuns() {
@@ -308,7 +344,7 @@ async function loadRuns() {
         <tr class="border-t border-slate-700/60 ${run.status !== "completed" ? "text-slate-500" : ""}">
           <td class="py-1 pr-2 font-mono">${run.id}</td>
           <td class="pr-2">${shortStamp(run.created_at)}</td>
-          <td class="pr-2">${run.symbol}</td>
+          <td class="pr-2">${run.symbol === "ALL" ? "TOUS" : run.symbol}</td>
           <td class="pr-2">${run.timeframe}</td>
           <td class="pr-2">${run.folds}</td>
           <td class="pr-2">${run.status}</td>
@@ -360,7 +396,17 @@ document.addEventListener("DOMContentLoaded", async () => {
   initTrainingWebSocket();
   document.getElementById("tr-run").addEventListener("click", runTraining);
   document.getElementById("tr-cancel").addEventListener("click", cancelTraining);
-  document.getElementById("tr-strategy").addEventListener("change", (e) => loadModelDefinition(e.target.value));
+  document.getElementById("tr-strategy").addEventListener("change", async (e) => {
+    await loadModelDefinition(e.target.value);
+    // Modèle unique : le timeframe conseillé de la définition s'applique
+    // (H4 pour couleuvre_v0_2) — l'utilisateur peut toujours le changer.
+    if (currentDef && currentDef.recommended_timeframe) {
+      const select = document.getElementById("tr-timeframe");
+      if ([...select.options].some(o => o.value === currentDef.recommended_timeframe)) {
+        select.value = currentDef.recommended_timeframe;
+      }
+    }
+  });
   // Délégation : les lignes de runs sont rebâties à chaque loadRuns().
   document.getElementById("tr-runs-body").addEventListener("click", (event) => {
     const button = event.target.closest("button[data-delete-run]");

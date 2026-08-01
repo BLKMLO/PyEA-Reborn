@@ -80,6 +80,10 @@ class Settings(BaseSettings):
     # Le SPREAD n'est PAS réglable : il est mesuré dans les données (colonnes
     # ask_*), donc réaliste par paire et par période.
     costs_commission_per_unit: float = Field(default=0.0, ge=0)
+    # Capital de départ du backtest (devise du compte). La courbe d'équité
+    # renvoyée est la VALEUR DU COMPTE : elle part de ce capital, et les
+    # métriques de compte (return_pct, drawdown %) s'y rapportent.
+    backtest_initial_capital: float = Field(default=10000.0, gt=0)
     history_data_dir: str = "./data/history"
     history_start_year: int = Field(default=2010, ge=1990, le=2100)
     history_instruments: list[str] = ["EURUSD"]
@@ -120,6 +124,7 @@ def _yaml_overrides(raw: dict[str, Any]) -> dict[str, Any]:
     risk = raw.get("risk", {})
     ui = raw.get("ui", {})
     costs = raw.get("costs", {})
+    backtest = raw.get("backtest", {})
     history = raw.get("history", {})
     storage = raw.get("storage", {})
     logging_cfg = raw.get("logging", {})
@@ -138,6 +143,7 @@ def _yaml_overrides(raw: dict[str, Any]) -> dict[str, Any]:
         "risk_max_positions_per_symbol": risk.get("max_positions_per_symbol"),
         "risk_max_open_positions": risk.get("max_open_positions"),
         "costs_commission_per_unit": costs.get("commission_per_unit"),
+        "backtest_initial_capital": backtest.get("initial_capital"),
         "history_data_dir": history.get("data_dir"),
         "history_start_year": history.get("start_year"),
         "history_instruments": history.get("instruments"),

@@ -37,7 +37,8 @@ PyEA-Reborn/
 │   │   │                                  # tranché bloque son symbole) et journalise les
 │   │   │                                  # ExecutionReport remontés par la gateway.
 │   │   ├── live_candles.py                # Agrégateur tick→bougie (OHLCV) aligné sur le timeframe.
-│   │   ├── live_models.py                 # Sélection du modèle live par actif (dernier run réussi).
+│   │   ├── live_models.py                 # Sélection du modèle live par actif (dernier run réussi
+│   │   │                                  # du symbole, sinon repli sur le run poolé « ALL » de v0_2).
 │   │   └── live_runtime.py                # Singleton : assemble feed + moteur, warmup par symbole
 │   │                                      # (modèle + historique), démarré/arrêté à la connexion broker.
 │   │

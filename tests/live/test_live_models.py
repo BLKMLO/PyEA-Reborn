@@ -81,3 +81,40 @@ def test_run_le_plus_recent_gagne(tmp_db: None, tmp_path: Path) -> None:
     assert model is not None
     assert model.run_id == "zzz-new"  # created_at plus récent
     assert model.timeframe == "H4"
+
+
+# --- Repli sur le run poolé « ALL » (modèle unique multi-actifs, v0_2) -----
+
+
+def test_repli_sur_le_run_poole_all(tmp_db: None, tmp_path: Path) -> None:
+    """Sans run propre au symbole, le run poolé ALL sert tous les actifs."""
+    artifacts = tmp_path / "run-pool"
+    _write_model(artifacts, 1)
+    _write_model(artifacts, 2)
+    create_run("run-pool", "couleuvre_v0_2", "ALL", "H4", 2, {})
+    finish_run("run-pool", "completed", {"trades": 1}, str(artifacts))
+
+    for symbol in ("EURUSD", "XAUUSD", "US500"):
+        model = resolve_live_model("couleuvre_v0_2", symbol)
+        assert model is not None
+        assert model.run_id == "run-pool"
+        assert model.fold == 2
+        assert model.timeframe == "H4"
+        assert model.symbol == symbol  # le symbole demandé, pas « ALL »
+
+
+def test_le_run_du_symbole_est_prioritaire_sur_all(tmp_db: None, tmp_path: Path) -> None:
+    """Un run propre au symbole (v0_1) prime sur le run poolé."""
+    pooled = tmp_path / "run-pool"
+    propre = tmp_path / "run-propre"
+    _write_model(pooled, 1)
+    _write_model(propre, 1)
+    create_run("run-pool", "couleuvre_v0_2", "ALL", "H4", 1, {})
+    finish_run("run-pool", "completed", {"trades": 1}, str(pooled))
+    create_run("run-propre", "couleuvre_v0_2", "EURUSD", "H1", 1, {})
+    finish_run("run-propre", "completed", {"trades": 1}, str(propre))
+
+    model = resolve_live_model("couleuvre_v0_2", "EURUSD")
+    assert model is not None and model.run_id == "run-propre"
+    # Un autre symbole, lui, retombe bien sur le run poolé.
+    assert resolve_live_model("couleuvre_v0_2", "GBPUSD").run_id == "run-pool"

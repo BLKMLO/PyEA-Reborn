@@ -85,11 +85,20 @@ async function runBacktest() {
 
 // --- Rendu -----------------------------------------------------------------
 
+// Montant en devise du compte, formaté lisiblement (10 000,00).
+function money(value) {
+  return value == null || Number.isNaN(value)
+    ? "—"
+    : Number(value).toLocaleString("fr-FR", {
+        minimumFractionDigits: 2, maximumFractionDigits: 2,
+      });
+}
+
 // Coûts payés (spread + commission). Sans données ask, rien n'est modélisé :
 // on le dit franchement plutôt que d'afficher un zéro trompeur.
 function costLabel(stats) {
   if (!stats.costs_modelled) return "non modélisés";
-  return `−${Number(stats.total_costs).toFixed(5)}`;
+  return `−${money(stats.total_costs)}`;
 }
 
 // Bandeau sous les cartes : d'où vient le spread, et ce qu'il coûte face au
@@ -134,15 +143,15 @@ function renderModelNote(result) {
     return;
   }
   // Modèle chargé mais 0 trade : l'early stopping produit un modèle qui
-  // s'abstient (probas jamais au-delà des seuils 0.55/0.45). Résultat honnête
+  // s'abstient (probas jamais au-delà des seuils d'entrée). Résultat honnête
   // (pas d'edge exploitable), pas un bug — le dire évite de lire la courbe
   // plate comme un dysfonctionnement.
   if (result.stats.trades === 0) {
     note.className = "rounded border border-amber-700/60 bg-amber-900/20 px-3 py-2 text-[11px] text-amber-300";
     note.textContent =
       `⚠ Modèle chargé (run ${model.run_id}, pli ${model.fold}) mais AUCUN signal émis : ` +
-      "l'early stopping a produit un modèle qui s'abstient (probas jamais au-delà " +
-      "des seuils 0.55/0.45). Pas d'edge exploitable sur cette paire/timeframe — " +
+      "le modèle s'abstient (probas jamais au-delà des seuils d'entrée de la " +
+      "stratégie). Pas d'edge exploitable sur cette paire/timeframe — " +
       "résultat honnête, pas un bug.";
     note.classList.remove("hidden");
     return;
@@ -166,17 +175,22 @@ function renderResults(result) {
   results.classList.remove("hidden");
   results.classList.add("flex");
   document.getElementById("bt-stats").innerHTML =
-    statCard("Bougies", stats.bars) +
-    statCard("Trades", stats.trades) +
+    // Langage « compte » d'abord : ce qu'on avait, ce qu'on a, ce que ça rend.
+    statCard("Capital initial", money(stats.initial_capital)) +
+    statCard("Capital final", money(stats.final_equity)) +
+    statCard("Rendement", pct1(stats.return_pct)) +
     // P&L NET de spread et commission — le seul chiffre qui compte.
     statCard("P&L net", stats.total_pnl, { colored: true }) +
-    statCard("Coûts", costLabel(stats)) +
+    statCard("Drawdown max", pct1(stats.max_drawdown_pct),
+             { hint: `soit ${money(stats.max_drawdown)} en dessous du plus haut` }) +
     statCard("Taux de gain", pct1(stats.win_rate)) +
-    statCard("Drawdown max", stats.max_drawdown) +
-    // Métriques fournies par backtrader (moteur d'exécution).
+    statCard("Profit factor", num2(stats.profit_factor)) +
+    statCard("Trades", stats.trades) +
+    statCard("Trade moyen", money(stats.avg_trade_pnl)) +
+    // Métrique fournie par backtrader (moteur d'exécution).
     statCard("Sharpe", num2(stats.sharpe_ratio)) +
-    statCard("SQN", num2(stats.sqn)) +
-    statCard("Profit factor", num2(stats.profit_factor));
+    statCard("Coûts", costLabel(stats)) +
+    statCard("Bougies", stats.bars);
   renderModelNote(result);
   renderCostNote(stats);
 
@@ -186,7 +200,7 @@ function renderResults(result) {
     data: {
       labels: result.equity_curve.map(p => shortStamp(p.time)),
       datasets: [{
-        label: "Équité",
+        label: "Valeur du compte",
         data: result.equity_curve.map(p => p.equity),
         borderColor: "#34d399",
         backgroundColor: "rgba(52, 211, 153, 0.08)",

@@ -24,6 +24,11 @@ from pyea.storage.storage_models import TrainingRun
 # ``_add_missing_columns`` — à revoir lors d'une migration Postgres).
 _ROWID_DESC = text("rowid DESC")
 
+#: Symbole sentinelle des runs POOLÉS (modèle unique multi-actifs) : la
+#: colonne ``symbol`` reste non nulle, un run mutualisé y est enregistré
+#: sous ``ALL`` — ``latest_completed_run(..., "ALL")`` le retrouve tel quel.
+POOLED_RUN_SYMBOL = "ALL"
+
 
 def _as_utc_iso(moment: datetime) -> str:
     """ISO 8601 avec fuseau EXPLICITE (``...+00:00``).

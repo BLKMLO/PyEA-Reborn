@@ -34,9 +34,11 @@ Modèle d'exécution (fidèle à l'ancien, validé bougie à bougie) :
   signale au lieu d'afficher un zéro trompeur.
 
 Détails d'implémentation :
-- on ne trade qu'**1 unité** nominale dans backtrader ; le P&L linéaire est
-  re-scalé par ``risk.max_position_size`` (Sharpe/SQN/drawdown % sont invariants
-  d'échelle, seuls les montants absolus sont mis à l'échelle) ;
+- le backtest tourne sur un **capital de départ réel** (``backtest.initial_capital``)
+  et trade la **taille réelle** (``risk.max_position_size``, émise par le
+  RiskManager) : le P&L backtrader et ``broker.getvalue()`` sont directement les
+  montants du compte, sans re-scaling post-hoc. La courbe d'équité est la
+  VALEUR DU COMPTE (elle part du capital initial) ;
 - ``Open`` synthétisé = close précédent borné dans [low, high] : PyEA modélise un
   marché continu (close-à-close, sans gap), ce qui reproduit exactement les
   barrières « au prix exact » et évite de fausses ouvertures en gap. Frames sans
@@ -67,7 +69,6 @@ from pyea.strategies.strategy_base import Strategy
 logger = get_logger(__name__)
 
 MAX_EQUITY_POINTS = 500       # Taille max de la courbe renvoyée à l'interface.
-_NOMINAL_CASH = 1_000_000.0   # Capital nominal backtrader (on ne trade qu'1 unité).
 
 
 def measure_spread(frame: pd.DataFrame) -> float | None:
@@ -161,6 +162,7 @@ class _StrategyBridge(bt.Strategy):
         self._open_side: str | None = None       # "long" / "short" / None
         self._entry_time: datetime | None = None
         self._entry_price: float | None = None
+        self._entry_size: float | None = None    # taille RÉELLE tradée
         self._pending_exit: tuple[datetime, float] | None = None  # clôture forcée
         self.trades: list[dict[str, Any]] = []
         self.equity: list[tuple[datetime, float]] = []
@@ -187,10 +189,13 @@ class _StrategyBridge(bt.Strategy):
             bar = min(len(self.data) - 1, self.p.n - 1)
             exit_time = self.p.index[bar]
             # Reconstruction à partir du P&L BRUT : les coûts ne déplacent pas
-            # le prix auquel la barrière a été touchée.
-            exit_price = entry_price + gross if side == "long" else entry_price - gross
+            # le prix auquel la barrière a été touchée. Le P&L étant désormais
+            # celui de la taille RÉELLE, on le ramène à l'unité.
+            unit_pnl = gross / self._entry_size
+            exit_price = entry_price + unit_pnl if side == "long" else entry_price - unit_pnl
         self.trades.append({
             "side": "BUY" if side == "long" else "SELL",
+            "quantity": self._entry_size,
             "entry_time": self._entry_time, "entry_price": entry_price,
             "exit_time": exit_time, "exit_price": round(exit_price, 5),
             "pnl": round(net, 5), "gross_pnl": round(gross, 5),
@@ -198,6 +203,7 @@ class _StrategyBridge(bt.Strategy):
         })
         self._open_side = None
         self._entry_time = self._entry_price = self._pending_exit = None
+        self._entry_size = None
 
     def next(self) -> None:
         self._i += 1
@@ -251,19 +257,23 @@ class _StrategyBridge(bt.Strategy):
             self.close(exectype=bt.Order.Market)
             return
         # Sinon : entrée (le RiskManager bloque les entrées si une position existe).
+        # La taille tradée est la taille RÉELLE validée par le RiskManager
+        # (``risk.max_position_size``) : le P&L backtrader est directement le
+        # montant du compte, sans re-scaling après coup.
         side = "long" if order.side.value == "BUY" else "short"
         self._open_side = side
         self._entry_time = ts
         self._entry_price = price
+        self._entry_size = float(order.quantity)
         open_fn = self.buy if side == "long" else self.sell
         barrier_fn = self.sell if side == "long" else self.buy
-        open_fn(size=1, exectype=bt.Order.Market)
+        open_fn(size=order.quantity, exectype=bt.Order.Market)
         stop_order = None
         if order.stop_loss is not None:
-            stop_order = barrier_fn(size=1, exectype=bt.Order.Stop, price=order.stop_loss)
+            stop_order = barrier_fn(size=order.quantity, exectype=bt.Order.Stop, price=order.stop_loss)
         if order.take_profit is not None:
             barrier_fn(
-                size=1, exectype=bt.Order.Limit, price=order.take_profit,
+                size=order.quantity, exectype=bt.Order.Limit, price=order.take_profit,
                 oco=stop_order,  # OCO si un stop existe ; sinon Limit seul.
             )
 
@@ -276,10 +286,13 @@ class BacktestEngine:
         strategy: Strategy,
         risk_manager: RiskManager,
         commission_per_unit: float = 0.0,
+        initial_capital: float = 10000.0,
     ) -> None:
         self._strategy = strategy
         self._risk = risk_manager
-        self._size = float(risk_manager.max_position_size)  # échelle du P&L
+        # Capital de départ du compte simulé : la courbe d'équité est la
+        # VALEUR DU COMPTE (elle part de ce capital).
+        self._initial_capital = float(initial_capital)
         # Commission éventuelle du courtier, PAR CÔTÉ et par unité, en unités
         # de prix (même échelle que le spread, pour se composer avec le P&L).
         self._commission = float(commission_per_unit)
@@ -314,7 +327,7 @@ class BacktestEngine:
         n = len(frame)
         result = BacktestResult(symbol=symbol, timeframe=timeframe, bars=n)
         if n == 0:
-            result.stats = _empty_stats(0)
+            result.stats = _empty_stats(0, self._initial_capital)
             return result
 
         warmup_frame = frame
@@ -359,7 +372,7 @@ class BacktestEngine:
         feed = _to_backtrader_feed(frame)
         cerebro = bt.Cerebro(stdstats=False)
         cerebro.broker.set_coc(True)           # entrée/clôture au close de décision
-        cerebro.broker.setcash(_NOMINAL_CASH)
+        cerebro.broker.setcash(self._initial_capital)
         # Coût FIXE par unité et par côté : un aller-retour paie donc exactement
         # un spread (deux demi-spreads) plus deux commissions. Modéliser le coût
         # ainsi — plutôt qu'en décalant les prix — garde les barrières remplies
@@ -378,10 +391,10 @@ class BacktestEngine:
             index=list(frame.index), closes=frame["bid_close"].to_numpy(),
             last_of_week=_last_bars_of_week(frame.index), n=len(frame),
         )
-        # riskfreerate=0 : on ne trade qu'1 unité sur un capital nominal élevé,
-        # le rendement relatif au cash est ~0 ; un taux sans risque non nul
-        # dominerait et rendrait le Sharpe absurde. À 0, Sharpe = μ/σ des
-        # rendements, invariant d'échelle et représentatif du flux de P&L.
+        # riskfreerate=0 : le compte ne trade qu'une position à la fois et le
+        # cash dormant n'est pas rémunéré dans la simulation ; un taux sans
+        # risque non nul ajouterait un rendement fictif au numérateur. À 0,
+        # Sharpe = μ/σ des rendements quotidiens de la valeur du compte.
         cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name="sharpe",
                             timeframe=bt.TimeFrame.Days, riskfreerate=0.0,
                             annualize=True)
@@ -392,20 +405,21 @@ class BacktestEngine:
     def _collect(
         self, result: BacktestResult, strat: _StrategyBridge, spread: float | None
     ) -> None:
-        size = self._size
+        # Les montants backtrader sont DÉJÀ ceux du compte (taille réelle
+        # tradée, capital réel) : aucun re-scaling post-hoc.
         result.trades = [
             BacktestTrade(
-                symbol=result.symbol, side=t["side"], quantity=size,
+                symbol=result.symbol, side=t["side"], quantity=t["quantity"],
                 entry_time=t["entry_time"], entry_price=t["entry_price"],
                 exit_time=t["exit_time"], exit_price=t["exit_price"],
-                pnl=round(t["pnl"] * size, 5),
-                gross_pnl=round(t["gross_pnl"] * size, 5),
-                cost=round(t["cost"] * size, 5),
+                pnl=t["pnl"], gross_pnl=t["gross_pnl"], cost=t["cost"],
             )
             for t in strat.trades
         ]
-        result.equity_curve = _downsample_equity(strat.equity, size, result.bars)
-        result.stats = _build_stats(result, strat, size, spread, self._commission)
+        result.equity_curve = _downsample_equity(strat.equity, result.bars)
+        result.stats = _build_stats(
+            result, strat, self._initial_capital, spread, self._commission
+        )
 
 
 # --------------------------------------------------------------------------
@@ -442,10 +456,10 @@ def _to_backtrader_feed(frame: pd.DataFrame) -> bt.feeds.PandasData:
 
 
 def _downsample_equity(
-    equity: list[tuple[datetime, float]], size: float, bars: int
+    equity: list[tuple[datetime, float]], bars: int
 ) -> list[tuple[datetime, float]]:
-    """Ramène la courbe (P&L = valeur - capital nominal, re-scalée) à ≤ 500 points."""
-    points = [(ts, round((value - _NOMINAL_CASH) * size, 5)) for ts, value in equity]
+    """Ramène la courbe (VALEUR DU COMPTE, part du capital initial) à ≤ 500 points."""
+    points = [(ts, round(value, 5)) for ts, value in equity]
     step = max(1, bars // MAX_EQUITY_POINTS)
     keep = [p for idx, p in enumerate(points) if idx % step == 0]
     if points and points[-1] not in keep:
@@ -453,29 +467,42 @@ def _downsample_equity(
     return keep
 
 
-def _max_drawdown(equity_curve: list[tuple[datetime, float]]) -> float:
-    peak, max_dd = float("-inf"), 0.0
+def _max_drawdown(equity_curve: list[tuple[datetime, float]]) -> tuple[float, float]:
+    """Drawdown maximal sur la courbe de valeur du compte.
+
+    Retourne ``(montant_absolu, ratio_par_rapport_au_pic)`` : le montant se lit
+    en devise du compte, le ratio en fraction du pic (0,12 = -12 % depuis le
+    plus haut). C'est la métrique « combien le compte a perdu depuis son plus
+    haut », dans les deux langages (absolu et relatif).
+    """
+    peak, max_dd, max_dd_pct = float("-inf"), 0.0, 0.0
     for _, value in equity_curve:
         peak = max(peak, value)
-        max_dd = max(max_dd, peak - value)
-    return round(max_dd, 5)
+        dd = peak - value
+        max_dd = max(max_dd, dd)
+        if peak > 0:
+            max_dd_pct = max(max_dd_pct, dd / peak)
+    return round(max_dd, 5), round(max_dd_pct, 5)
 
 
-def _empty_stats(bars: int) -> dict[str, Any]:
+def _empty_stats(bars: int, initial_capital: float) -> dict[str, Any]:
     return {
         "bars": bars, "trades": 0, "total_pnl": 0.0, "win_rate": None,
-        "max_drawdown": 0.0, "sharpe_ratio": None, "sqn": None,
+        "max_drawdown": 0.0, "max_drawdown_pct": 0.0,
+        "sharpe_ratio": None, "sqn": None,
         "profit_factor": None, "avg_trade_pnl": None,
         "best_trade": None, "worst_trade": None,
         "gross_pnl": 0.0, "total_costs": 0.0,
         "costs_modelled": False, "spread": None, "commission_per_unit": 0.0,
+        "initial_capital": initial_capital, "final_equity": initial_capital,
+        "return_pct": 0.0,
     }
 
 
 def _build_stats(
     result: BacktestResult,
     strat: _StrategyBridge,
-    size: float,
+    initial_capital: float,
     spread: float | None,
     commission: float,
 ) -> dict[str, Any]:
@@ -483,18 +510,20 @@ def _build_stats(
     wins = [p for p in pnls if p > 0]
     gross_win = sum(p for p in pnls if p > 0)
     gross_loss = -sum(p for p in pnls if p < 0)
+    total_pnl = round(sum(pnls), 5)
+    max_dd, max_dd_pct = _max_drawdown(result.equity_curve)
+    final_equity = (
+        result.equity_curve[-1][1] if result.equity_curve else initial_capital
+    )
 
-    # Sharpe (riskfreerate=0) et SQN sont invariants d'échelle → exploitables.
-    # Le « drawdown % » de backtrader, lui, serait rapporté au capital nominal
-    # (1 unité sur 1 M) et donc dénué de sens : on ne garde que le drawdown
-    # ABSOLU, calculé sur la courbe d'équité re-scalée (montant réel).
+    # Sharpe (riskfreerate=0) et SQN restent invariants d'échelle → exploitables.
     sharpe = strat.analyzers.sharpe.get_analysis().get("sharperatio")
     sqn = strat.analyzers.sqn.get_analysis().get("sqn")
 
     return {
         "bars": result.bars,
         "trades": len(pnls),
-        "total_pnl": round(sum(pnls), 5),  # net de coûts
+        "total_pnl": total_pnl,  # net de coûts, en devise du compte
         "gross_pnl": round(sum(t.gross_pnl for t in result.trades), 5),
         "total_costs": round(sum(t.cost for t in result.trades), 5),
         # False = les données n'avaient pas de colonnes ask : AUCUN spread n'a
@@ -502,8 +531,13 @@ def _build_stats(
         "costs_modelled": spread is not None or commission > 0,
         "spread": None if spread is None else round(spread, 6),
         "commission_per_unit": commission,
+        # --- métriques de compte (rapportées au capital de départ) ---
+        "initial_capital": initial_capital,
+        "final_equity": round(final_equity, 5),
+        "return_pct": round(total_pnl / initial_capital, 5),
         "win_rate": round(len(wins) / len(pnls), 4) if pnls else None,
-        "max_drawdown": _max_drawdown(result.equity_curve),
+        "max_drawdown": max_dd,
+        "max_drawdown_pct": max_dd_pct,
         "sharpe_ratio": round(sharpe, 4) if sharpe is not None else None,
         "sqn": round(sqn, 4) if sqn else None,
         "profit_factor": round(gross_win / gross_loss, 4) if gross_loss > 0 else None,

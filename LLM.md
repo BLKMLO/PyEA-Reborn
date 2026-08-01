@@ -145,9 +145,15 @@ runs — pas de navigateur outillé ici).
 - **Backtest** : adossé à **backtrader vendorisé** (`lib/backtrader/`, GPLv3
   OK usage perso). Modèle : entrée Market cheat-on-close, barrières TP/SL =
   Stop+Limit OCO au prix exact, stop prioritaire si les deux franchies, clôture
-  forcée fin de semaine ISO + liquidation finale, bougie fantôme, 1 unité
-  nominale re-scalée par `max_position_size`, `engine.run` synchrone (param
-  `model_path` → transmis à `warmup`). **La page backtest charge le modèle**
+  forcée fin de semaine ISO + liquidation finale, bougie fantôme, **capital de
+  départ réel** (`backtest.initial_capital`, défaut 10 000 — la taille réelle
+  `max_position_size` est tradée, plus de re-scaling post-hoc ; la courbe
+  d'équité est la **valeur du compte**), `engine.run` synchrone (param
+  `model_path` → transmis à `warmup`, `warmup` reçoit aussi `"symbol"`).
+  Stats = métriques de compte : `initial_capital`, `final_equity`,
+  `return_pct`, `max_drawdown` (absolu) + `max_drawdown_pct`, P&L net, taux
+  de gain, profit factor, trade moyen, Sharpe. **La page backtest charge le
+  modèle**
   (dernier run réussi de la paire, dernier pli — règle `resolve_live_model`
   partagée avec le live) ; sans run → `model: null` + bandeau « stratégie
   muette », mismatch de timeframe = bandeau ambre.
@@ -159,7 +165,13 @@ runs — pas de navigateur outillé ici).
   split aléatoire), job de thread unique annulable, progression WS
   `training.progress` + reprise après reload (`/api/training/current-job`),
   `fail_orphan_runs` au démarrage, historisé SQLite (`training_runs`) +
-  artefacts `data/models/<run>/fold_<i>/`. **Suppression d'un run** :
+  artefacts `data/models/<run>/fold_<i>/`. **Mode poolé (v0_2)** :
+  `TrainingRunRequest.symbols` (liste, ou omis = tous les actifs ayant un
+  historique) ; `run_walkforward_pooled` (split sur la plage commune, UN
+  modèle par pli, un backtest OOS par actif, agrégats honnêtes + ventilation
+  `oos_by_symbol`, Sharpe/SQN = None en poolé) ; run enregistré sous la
+  sentinelle **`POOLED_RUN_SYMBOL = "ALL"`** ; 400 si stratégie non
+  `pooled` avec plusieurs symboles ; stratégie par défaut `couleuvre_v0_2`. **Suppression d'un run** :
   `DELETE /api/training/runs/{id}` (ligne SQL + `rmtree` des artefacts, garde
   anti-chemin bidouillé ; 404 inconnu, 409 « running ») + bouton ✕ dans le
   tableau des runs (confirm JS ; live/backtest retombent sur le run précédent
@@ -190,6 +202,21 @@ runs — pas de navigateur outillé ici).
     rapport. `model.txt` + `features.json` par pli, AUC IS calculée à la main.
   - `on_tick` : proba → seuils 0.55/0.45 → ENTER_LONG/SHORT avec mêmes
     barrières ATR. Non-fuite prouvée : sur bruit, AUC IS ~0,96 / OOS ~50 %.
+- **Couleuvre v0.2** (spec : `docs/strategie_couleuvre.md` — **modèle UNIQUE
+  mutualisé multi-actifs**, décision « un modèle par actif » révoquée le
+  2026-07-31 ; v0_1 figée conservée) :
+  - `strategy_couleuvre_v0_2.py` (`CouleuvreV02`) : réutilise features (34,
+    sans échelle) et labeling de v0_1 par import ; **`train`/`oos_auc`
+    acceptent `dict[str, DataFrame]` ou un DataFrame seul** ; features+labels
+    calculés PAR symbole avant concaténation ; 35e feature **`symbol`
+    catégorielle native** (codes figés via `pd.Categorical.from_codes`,
+    catégories persistées `features.json["symbol_categories"]`, inconnu →
+    code −1). Piège corrigé : index dupliqués entre actifs → `_concat_sorted`
+    (tri positionnel stable, jamais `.loc` sur étiquettes dupliquées).
+  - **Seuils plus sélectifs 0.60/0.40**, H4 recommandé, barrières inchangées
+    (1,5×ATR/5 j) ; early stopping causal par symbole (queue 15 % de chacun).
+  - `resolve_live_model` : run du symbole d'abord, **repli sur le run `ALL`**
+    — le même modèle sert tous les symboles en live comme en backtest.
 - **RiskManager.evaluate v2** : HOLD ignoré, EXIT jamais bloqué, entrées à
   taille fixe sous 3 limites : `max_positions_per_symbol`, `max_open_positions`
   (exposition globale — les deux séparés), `max_daily_loss_pct` (perte
@@ -216,6 +243,32 @@ runs — pas de navigateur outillé ici).
 
 ## Journal de décisions (condensé, antichronologique)
 
+- **2026-07-31 — Modèle unique multi-actifs (`couleuvre_v0_2`) + backtest
+  « compte » (3 demandes utilisateur)**. **201 tests verts** (+27), seul
+  échec = l'environnemental connu (MT5 installé → 502 vs 503 attendu). À
+  vérifier côté utilisateur : les 3 pages au navigateur (pas de node/navigateur
+  outillé ici) et un vrai run poolé sur données réelles.
+  (1) **Backtest capital réel** : `backtest.initial_capital` (défaut 10 000) ;
+  `BacktestEngine` trade la taille réelle (re-scaling post-hoc et
+  `_NOMINAL_CASH` supprimés), courbe d'équité = **valeur du compte** ;
+  stats += `initial_capital`/`final_equity`/`return_pct`/`max_drawdown_pct`
+  (`_max_drawdown` → tuple) ; `warmup` reçoit `"symbol"`. UI : cartes
+  Capital initial/final, Rendement %, P&L net, DD max (%+montant), Taux de
+  gain, PF, Trades, Trade moyen, Sharpe, Coûts, Bougies (SQN retiré de la
+  page, grille 6 colonnes).
+  (2) **`couleuvre_v0_2`** : UN LightGBM mutualisé (feature `symbol`
+  catégorielle, catégories persistées, `from_codes`), `train`/`oos_auc`
+  acceptent dict ou DataFrame, seuils **0.60/0.40**, H4 conseillé, v0_1
+  figée. Piège : index dupliqués inter-actifs → `_concat_sorted` (jamais
+  `.loc` sur étiquettes dupliquées = explosion cartésienne).
+  (3) **Walk-forward poolé** : `run_walkforward_pooled` (plage commune,
+  actif disjoint écarté, UN modèle/pli, backtest OOS par actif, equity =
+  somme des P&L, Sharpe/SQN=None en poolé, `oos_by_symbol`) ; API
+  `symbols` (omis = tous) ; sentinelle `POOLED_RUN_SYMBOL="ALL"` ;
+  `resolve_live_model` : run du symbole puis **repli `ALL`** ; UI
+  entraînement : symbole désactivé « Tous les actifs » pour stratégie
+  `pooled`, défaut v0_2/H4, colonne « TOUS », bloc « Par actif ».
+  Docs à jour (`strategie_couleuvre.md` §v0.2, architecture, choix_techniques).
 - **2026-07-30** — **Trois ajouts interface** (travail repris en cours de
   route) : (1) **Sélecteur d'unité de temps M1→D1** sur la page Live :
   le serveur ne sert que du M1, l'agrégation est faite côté client dans
