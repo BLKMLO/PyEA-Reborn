@@ -52,9 +52,11 @@ def _wait_for_job(client: TestClient, job_id: str, timeout: float = 15.0) -> dic
 
 def test_entrainement_complet(training_env: Path) -> None:
     with TestClient(create_app()) as client:
+        # Un SEUL actif ⇒ stratégie par actif : la mutualisée exige un pool.
         response = client.post(
             "/api/training/run",
-            json={"symbols": ["EURUSD"], "timeframe": "H1", "folds": 3},
+            json={"symbols": ["EURUSD"], "timeframe": "H1", "folds": 3,
+                  "strategy": "couleuvre_v0_1"},
         )
         assert response.status_code == 200
         payload = response.json()
@@ -151,7 +153,8 @@ def test_erreurs_entrainement(training_env: Path) -> None:
         # avec un message actionnable, et le run est historisé « failed ».
         too_short = client.post(
             "/api/training/run",
-            json={"symbols": ["EURUSD"], "timeframe": "D1", "folds": 20},
+            json={"symbols": ["EURUSD"], "timeframe": "D1", "folds": 20,
+                  "strategy": "couleuvre_v0_1"},
         )
         assert too_short.status_code == 200
         job = _wait_for_job(client, too_short.json()["job_id"])
@@ -185,6 +188,71 @@ def test_entrainement_poole_tous_les_actifs(training_env: Path) -> None:
     assert runs[0]["symbol"] == "ALL"
     # La stratégie par défaut est désormais la mutualisée.
     assert runs[0]["strategy"] == "couleuvre_v0_2"
+
+
+def test_run_poole_enregistre_les_actifs_entraines(training_env: Path) -> None:
+    """Le run poolé persiste les actifs RÉELLEMENT vus : c'est ce que le live
+    consulte avant de servir le modèle mutualisé à une paire."""
+    from pyea.storage.storage_training_runs import latest_completed_run
+
+    _write_history(training_env / "history", "GBPUSD")
+    with TestClient(create_app()) as client:
+        payload = client.post("/api/training/run", json={"folds": 2}).json()
+        assert _wait_for_job(client, payload["job_id"])["status"] == "completed"
+        run = latest_completed_run("couleuvre_v0_2", "ALL")
+
+    assert run["trained_symbols"] == ["EURUSD", "GBPUSD"]
+
+
+def test_champ_symbol_obsolete_refuse(training_env: Path) -> None:
+    """L'ancien champ ``symbol`` (singulier) était ignoré en silence : un appel
+    hérité lançait alors un run sur TOUS les actifs du disque. 422 explicite."""
+    with TestClient(create_app()) as client:
+        response = client.post(
+            "/api/training/run", json={"symbol": "EURUSD", "folds": 3},
+        )
+    assert response.status_code == 422
+
+
+def test_selection_vide_refusee(training_env: Path) -> None:
+    """``symbols: []`` est une demande vide, pas un synonyme de « tous »."""
+    with TestClient(create_app()) as client:
+        response = client.post("/api/training/run", json={"symbols": []})
+    assert response.status_code == 422
+
+
+def test_strategie_mutualisee_refuse_un_seul_actif(training_env: Path) -> None:
+    """Un seul historique local : la mutualisée refuse au lieu de basculer en
+    mode par actif tout en annonçant « tous les actifs »."""
+    with TestClient(create_app()) as client:
+        response = client.post("/api/training/run", json={"folds": 2})
+    assert response.status_code == 400
+    assert "PLUSIEURS actifs" in response.json()["detail"]
+
+
+def test_actif_trop_court_fait_echouer_le_run(training_env: Path) -> None:
+    """Un actif demandé mais écarté pour historique trop court ne doit pas
+    disparaître dans un log : le run échoue en le nommant."""
+    _write_history(training_env / "history", "GBPUSD")
+    # 3 bougies D1 pour GBPUSD seulement : sous le seuil folds × 20.
+    index = pd.date_range("2020-01-01", periods=3 * 1440, freq="1min", tz="UTC")
+    frame = pd.DataFrame(
+        {"bid_open": 1.2, "bid_high": 1.2, "bid_low": 1.2, "bid_close": 1.2,
+         "volume": 1.0},
+        index=index,
+    )
+    target = year_file_path(training_env / "history", "USDCHF", 2020)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_parquet(target)
+
+    with TestClient(create_app()) as client:
+        payload = client.post(
+            "/api/training/run", json={"timeframe": "D1", "folds": 4},
+        ).json()
+        job = _wait_for_job(client, payload["job_id"])
+
+    assert job["status"] == "failed"
+    assert "USDCHF" in job["error"] and "trop court" in job["error"]
 
 
 def test_strategie_mono_actif_refuse_le_pool(training_env: Path) -> None:

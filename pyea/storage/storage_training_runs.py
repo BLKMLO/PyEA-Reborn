@@ -72,12 +72,21 @@ def finish_run(
     status: str,
     oos_stats: dict[str, Any] | None = None,
     artifacts_path: str | None = None,
+    trained_symbols: list[str] | None = None,
 ) -> None:
+    """Clôt un run. ``trained_symbols`` = actifs RÉELLEMENT vus par le modèle
+    (après écarts de couverture), enregistrés dans ``params_json`` : c'est la
+    seule preuve qu'un run poolé couvre une paire donnée, et le live la
+    consulte avant de lui servir le modèle mutualisé."""
     with get_session() as session:
         run = session.get(TrainingRun, run_id)
         if run is None:
             return
         run.status = status
+        if trained_symbols is not None:
+            params = json.loads(run.params_json)
+            params["trained_symbols"] = list(trained_symbols)
+            run.params_json = json.dumps(params, default=str)
         if oos_stats:
             run.oos_trades = oos_stats.get("trades")
             run.oos_pnl = oos_stats.get("total_pnl")
@@ -143,6 +152,9 @@ def latest_completed_run(strategy_name: str, symbol: str) -> dict[str, Any] | No
             "timeframe": run.timeframe,
             "folds": run.folds,
             "artifacts_path": run.artifacts_path,
+            # Actifs effectivement entraînés (cf. ``finish_run``) ; absent des
+            # runs antérieurs à leur enregistrement.
+            "trained_symbols": json.loads(run.params_json).get("trained_symbols"),
         }
 
 

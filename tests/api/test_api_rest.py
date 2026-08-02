@@ -51,7 +51,8 @@ def test_status_repond() -> None:
         response = client.get("/api/status")
     assert response.status_code == 200
     data = response.json()
-    assert data["strategy"] == "couleuvre_v0_1"
+    # Défaut aligné sur les pages Entraînement/Backtest : la mutualisée.
+    assert data["strategy"] == "couleuvre_v0_2"
     assert data["chart_refresh_seconds"] >= 1
 
 

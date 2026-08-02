@@ -184,6 +184,75 @@ def test_run_walkforward_pooled_structure(tmp_path: Path) -> None:
     assert (tmp_path / "run" / "metadata.json").exists()
 
 
+def test_actif_ecarte_absent_du_rapport(tmp_path: Path) -> None:
+    """Un actif écarté par la découpe ne doit PAS figurer comme tradé.
+
+    Il apparaissait avec « 0 trade / 0,00 » dans la ventilation par actif —
+    indiscernable d'une paire réellement backtestée sur laquelle le modèle
+    s'était abstenu. C'est un résultat fabriqué.
+    """
+    from pyea.strategies.strategy_registry import get_strategy
+    from pyea.training import run_walkforward_pooled
+
+    frames = {
+        "AAA": _frame(200),
+        "BBB": _frame_decale(200, "2024-01-01", pente=-0.001),
+        "HORS": _frame_decale(200, "2025-06-01"),  # hors plage commune
+    }
+    report = run_walkforward_pooled(
+        strategy_factory=get_strategy("couleuvre_v0_2"),
+        risk_manager=RiskManager(get_settings()),
+        frames=frames,
+        timeframe="H1",
+        n_folds=2,
+        artifacts_dir=tmp_path / "run",
+        progress=lambda payload: None,
+        cancelled=lambda: False,
+    )
+    assert report["symbols"] == ["AAA", "BBB"]
+    assert report["dropped_symbols"] == ["HORS"]
+    assert "HORS" not in report["oos_by_symbol"]
+
+
+def test_pool_reduit_a_un_actif_echoue(tmp_path: Path) -> None:
+    """Un pool que la découpe réduit à UN actif n'est pas un modèle
+    multi-actifs : il serait pourtant enregistré sous « ALL » et servi à
+    toutes les paires en live. On échoue plutôt que de mentir."""
+    from pyea.strategies.strategy_registry import get_strategy
+    from pyea.training import run_walkforward_pooled
+
+    frames = {
+        "AAA": _frame(200),
+        "HORS": _frame_decale(200, "2025-06-01"),
+    }
+    with pytest.raises(ValueError, match="un seul actif survit"):
+        run_walkforward_pooled(
+            strategy_factory=get_strategy("couleuvre_v0_2"),
+            risk_manager=RiskManager(get_settings()),
+            frames=frames,
+            timeframe="H1",
+            n_folds=2,
+            artifacts_dir=tmp_path / "run",
+            progress=lambda payload: None,
+            cancelled=lambda: False,
+        )
+
+
+def test_couts_modelises_exigent_tous_les_actifs() -> None:
+    """``costs_modelled`` affirme « TOUS ces trades ont payé leurs coûts » :
+    un seul actif pourvu de colonnes ask ne peut pas en répondre pour les
+    autres, sans quoi l'avertissement « résultats OPTIMISTES » disparaît."""
+    from types import SimpleNamespace
+
+    from pyea.training.training_walkforward import _aggregate_symbol_stats
+
+    results = {
+        "AVEC": SimpleNamespace(stats={"costs_modelled": True}, trades=[]),
+        "SANS": SimpleNamespace(stats={"costs_modelled": False}, trades=[]),
+    }
+    assert _aggregate_symbol_stats(results, [])["costs_modelled"] is False
+
+
 def test_run_walkforward_pooled_exige_deux_actifs(tmp_path: Path) -> None:
     from pyea.strategies.strategy_registry import get_strategy
     from pyea.training import run_walkforward_pooled

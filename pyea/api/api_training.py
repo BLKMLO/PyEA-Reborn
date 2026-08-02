@@ -16,7 +16,7 @@ from typing import Any
 
 import pandas as pd
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from pyea.config.config_settings import get_settings
 from pyea.core.core_logging import get_logger
@@ -33,10 +33,18 @@ router = APIRouter(prefix="/api/training", tags=["training"])
 
 
 class TrainingRunRequest(BaseModel):
-    # ``symbols`` = liste d'actifs (poolé si plusieurs) ; ``None`` = TOUS
-    # les actifs ayant un historique local — le cas voulu pour un modèle
-    # unique (couleuvre_v0_2).
-    symbols: list[str] | None = None
+    # ``extra="forbid"`` : le champ ``symbol`` (singulier) EXISTAIT et était
+    # obligatoire. Ignoré silencieusement, un ancien appel — script, curl
+    # enregistré, bundle JS en cache — laissait ``symbols`` à None et lançait
+    # un walk-forward sur TOUS les actifs du disque au lieu du seul demandé.
+    # Un 422 explicite vaut mieux qu'un run de plusieurs heures hors sujet.
+    model_config = ConfigDict(extra="forbid")
+
+    # ``symbols`` = liste d'actifs ; ``None`` = TOUS les actifs ayant un
+    # historique local — le cas voulu pour un modèle unique (couleuvre_v0_2).
+    # ``min_length=1`` : une liste VIDE est une demande explicite et vide, pas
+    # un synonyme de « tous » (elle valait « entraîne sur tout » sans le dire).
+    symbols: list[str] | None = Field(default=None, min_length=1)
     timeframe: str = "H1"
     strategy: str = "couleuvre_v0_2"
     folds: int = Field(default=4, ge=1, le=20)
@@ -103,12 +111,25 @@ async def start_training(request: TrainingRunRequest) -> dict[str, Any]:
             detail=f"Aucun historique pour {', '.join(missing)} dans {data_dir} — "
                    "lancer `python download_history.py` d'abord.",
         )
-    pooled = len(symbols) > 1
-    if pooled and not strategy_cls().model_definition().get("pooled"):
+    # Le mode se lit sur la STRATÉGIE, pas sur le nombre d'actifs résolus :
+    # avec une seule paire téléchargée, une stratégie mutualisée basculait en
+    # mode par actif et son run était rangé sous « EURUSD » alors que
+    # l'interface annonçait « tous les actifs » — et la paire suivante ne
+    # trouvait ensuite aucun modèle.
+    pooled = bool(strategy_cls().model_definition().get("pooled"))
+    if not pooled and len(symbols) > 1:
         raise HTTPException(
             status_code=400,
             detail=f"{request.strategy} s'entraîne par actif : passer un seul "
                    "symbole, ou choisir une stratégie mutualisée (couleuvre_v0_2).",
+        )
+    if pooled and len(symbols) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{request.strategy} entraîne UN modèle sur PLUSIEURS actifs : "
+                   f"un seul historique disponible ({', '.join(symbols)}). "
+                   "Téléchargez d'autres paires, ou choisissez une stratégie "
+                   "par actif (couleuvre_v0_1).",
         )
 
     run_id = make_run_id(request.strategy)
@@ -128,6 +149,7 @@ async def start_training(request: TrainingRunRequest) -> dict[str, Any]:
             start = pd.Timestamp(request.start, tz="UTC") if request.start else None
             end = pd.Timestamp(request.end, tz="UTC") if request.end else None
             frames: dict[str, pd.DataFrame] = {}
+            too_short: list[str] = []
             for symbol in symbols:
                 progress({"phase": "load",
                           "message": f"Chargement de l'historique {symbol}…"})
@@ -136,14 +158,20 @@ async def start_training(request: TrainingRunRequest) -> dict[str, Any]:
                 if len(frame) >= request.folds * 20:
                     frames[symbol] = frame
                 else:
+                    too_short.append(f"{symbol} ({len(frame)} bougies)")
                     logger.warning(
                         "Entraînement : %s écarté (historique trop court : %d "
                         "bougies pour %d plis).", symbol, len(frame), request.folds,
                     )
-            if not frames or (pooled and len(frames) < 2):
+            # Un actif demandé mais écarté ne doit JAMAIS disparaître dans un
+            # simple log : l'utilisateur croirait avoir entraîné son univers
+            # complet. Tout ce qui manque fait échouer le run avec la liste.
+            if too_short:
                 raise ValueError(
-                    "Historique trop court pour "
-                    f"{request.folds} plis sur les actifs demandés."
+                    f"Historique trop court pour {request.folds} plis : "
+                    f"{', '.join(too_short)}. Téléchargez plus d'historique, "
+                    "réduisez le nombre de plis, ou retirez ces actifs de la "
+                    "sélection."
                 )
             if pooled:
                 report = run_walkforward_pooled(
@@ -157,6 +185,7 @@ async def start_training(request: TrainingRunRequest) -> dict[str, Any]:
                     cancelled=cancelled,
                     commission_per_unit=settings.costs_commission_per_unit,
                     initial_capital=settings.backtest_initial_capital,
+                    leverage=settings.backtest_leverage,
                 )
             else:
                 report = run_walkforward(
@@ -171,12 +200,19 @@ async def start_training(request: TrainingRunRequest) -> dict[str, Any]:
                     cancelled=cancelled,
                     commission_per_unit=settings.costs_commission_per_unit,
                     initial_capital=settings.backtest_initial_capital,
+                    leverage=settings.backtest_leverage,
                 )
         except Exception:
             finish_run(run_id, "failed")
             raise
         status = "cancelled" if report["cancelled"] else "completed"
-        finish_run(run_id, status, report["oos_stats"], str(artifacts_dir))
+        # Les actifs RÉELLEMENT entraînés (ceux qui ont survécu à la découpe)
+        # sont persistés avec le run : c'est ce que ``resolve_live_model``
+        # interroge avant de servir un modèle poolé à une paire donnée.
+        finish_run(
+            run_id, status, report["oos_stats"], str(artifacts_dir),
+            trained_symbols=report.get("symbols", symbols),
+        )
         return {"run_id": run_id, **report}
 
     job = job_manager.start(target, loop)

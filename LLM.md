@@ -243,6 +243,49 @@ runs — pas de navigateur outillé ici).
 
 ## Journal de décisions (condensé, antichronologique)
 
+- **2026-08-02 — Revue de code du commit `couleuvre_v0_2` : 10 correctifs
+  d'honnêteté**. Tous les défauts partageaient le même vice : le système
+  affirmait quelque chose qu'il n'avait pas vérifié.
+  (1) **Levier de backtest** (`backtest.leverage`, défaut 30, borné ≥ 1) : en
+  passant à la taille réelle sur un capital réel, le broker cash-only de
+  backtrader s'est remis à refuser en marge toute entrée LONGUE dont le
+  notionnel dépasse le cash — les ventes, qui génèrent du cash, passaient
+  toujours. Un modèle des deux côtés ne rapportait que ses SHORTs, sans une
+  ligne de log. Le levier porte la marge (`setcommission(leverage=…)`, posée
+  même à coût nul) ; `notify_order` compte les refus dans
+  `stats["rejected_orders"]` et l'UI affiche un bandeau ROUGE — plus jamais
+  « le modèle s'abstient » pour une exécution ratée.
+  (2) **Repli poolé `ALL` sous condition** : `finish_run(trained_symbols=…)`
+  persiste les actifs RÉELLEMENT entraînés dans `params_json` ;
+  `resolve_live_model` refuse le modèle mutualisé à toute paire absente de
+  cette liste (et à un run qui ne la déclare pas). Sinon une paire téléchargée
+  après coup recevait un modèle sans une seule de ses bougies (catégorie
+  `symbol` → code -1) et émettait de vrais ordres.
+  (3) **Défaut de stratégie unifié** `couleuvre_v0_2` (config.yaml,
+  `BacktestRunRequest`, `fillSelect` de backtest.js) : le live et le backtest
+  cherchaient encore v0_1 après un entraînement v0_2 — courbe plate inexpliquée.
+  (4) **Actifs écartés** : `_run` calcule les actifs RETENUS depuis les plis
+  (plus jamais `frames`), rapporte `dropped_symbols`, et l'UI l'affiche. Un
+  actif écarté figurait « 0 trade / 0,00 », indiscernable d'une abstention.
+  (5) **Pool réduit à un actif → `ValueError`** : un modèle mono-actif ne peut
+  pas être enregistré sous `ALL` et servi à toutes les paires.
+  (6) `TrainingRunRequest` : `extra="forbid"` (l'ancien champ `symbol` ignoré
+  lançait un run sur TOUT le disque) + `min_length=1` (`symbols: []` ≠ « tous »).
+  (7) **`pooled` se lit sur la STRATÉGIE**, plus sur `len(symbols)` : avec une
+  seule paire, la mutualisée basculait en mode par actif tout en annonçant
+  « tous les actifs ». Un seul actif + stratégie poolée = 400 explicite.
+  (8) **Historique trop court → run en échec** nommant les actifs (c'était un
+  simple `logger.warning`).
+  (9) **`costs_modelled` : `any` → `all`** (pli et rapport) — un actif pourvu
+  de colonnes ask masquait l'avertissement « résultats OPTIMISTES » pour tous.
+  (10) **Précision d'affichage** : `return_pct`/`max_drawdown_pct` arrondis à
+  8 décimales (5 les annulait à taille unitaire) ; côté JS `amount()` (5
+  décimales sous l'unité) et `pctFine()` remplacent `money()`/`pct1()` sur les
+  coûts, le trade moyen, le rendement et le DD — `money()` affichait « 0,00 »
+  pour un spread cumulé.
+  **201 tests verts** (+13 nouveaux), seuls échecs = environnementaux/locaux
+  (MT5 installé → 502 vs 503 ; paires croisées commentées dans le config.yaml
+  local → 404 sur EURCHF).
 - **2026-07-31 — Modèle unique multi-actifs (`couleuvre_v0_2`) + backtest
   « compte » (3 demandes utilisateur)**. **201 tests verts** (+27), seul
   échec = l'environnemental connu (MT5 installé → 502 vs 503 attendu). À

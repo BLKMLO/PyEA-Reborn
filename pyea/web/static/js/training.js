@@ -267,6 +267,25 @@ function renderTraining(report) {
     }
   }
 
+  // Actifs DEMANDÉS mais écartés du run (couverture incompatible). Sans ce
+  // bandeau, ils n'apparaissaient nulle part : le modèle passait pour avoir
+  // couvert un univers qu'il n'a jamais vu.
+  const dropped = document.getElementById("tr-dropped-note");
+  if (dropped) {
+    const absents = report.dropped_symbols || [];
+    if (absents.length) {
+      dropped.className =
+        "rounded border border-amber-700/60 bg-amber-900/20 px-3 py-2 text-[11px] text-amber-300";
+      dropped.textContent =
+        `⚠ ${absents.join(", ")} : écarté(s) du run (pas de plage commune avec ` +
+        "les autres actifs). Ces paires ne sont NI dans le modèle NI dans les " +
+        "résultats ci-dessous — le live refusera de les trader.";
+    } else {
+      dropped.className = "hidden";
+      dropped.textContent = "";
+    }
+  }
+
   const curve = report.oos_equity_curve || [];
   if (oosEquityChart) oosEquityChart.destroy();
   oosEquityChart = new Chart(document.getElementById("tr-equity"), {

@@ -21,7 +21,10 @@ broker:
 
 strategy:
   # Stratégie active : doit correspondre à une clé du registre de stratégies.
-  name: "couleuvre_v0_1"
+  # Doit rester alignée avec le défaut des pages Entraînement et Backtest —
+  # sinon le live cherche un modèle sous un AUTRE nom de stratégie que celui
+  # qui vient d'être entraîné, et reste muet sans expliquer pourquoi.
+  name: "couleuvre_v0_2"
   # Kill-switch GLOBAL de la stratégie. Le trading par paire se pilote
   # depuis le dashboard (bouton Trading/Stopped, persisté en base) :
   # une paire ne trade que si ce flag ET son interrupteur sont actifs.
@@ -37,10 +40,10 @@ risk:
   # (repère persisté : un redémarrage ne remet pas le compteur à zéro).
   # Au-delà, plus aucune ENTRÉE n'est autorisée ; les sorties le restent
   # toujours. 0 = limite désactivée.
-  # ⚠ Garde LIVE uniquement : elle a besoin de l'équité réelle du broker. Le
-  # backtest ne trade qu'une unité nominale sur un capital synthétique, où un
-  # pourcentage d'équité n'aurait aucun sens — il est donc, sur ce seul point,
-  # un peu optimiste par rapport au live.
+  # ⚠ Garde LIVE uniquement : elle a besoin de l'équité réelle du broker,
+  # remise à jour en continu. Le backtest tourne pourtant bien sur un capital
+  # réel (backtest.initial_capital) — il ne modélise simplement pas cette
+  # limite, et reste donc, sur ce seul point, un peu optimiste face au live.
   max_daily_loss_pct: 2.0
   # Deux plafonds DISTINCTS. Par symbole : empêche d'empiler des entrées sur
   # la même paire. Sur le compte : borne l'exposition totale — attention, un
@@ -69,6 +72,14 @@ backtest:
   # est la VALEUR DU COMPTE : elle part de ce capital ; return_pct et le
   # drawdown en % s'y rapportent. La taille tradée reste risk.max_position_size.
   initial_capital: 10000.0
+  # Effet de levier du compte simulé : une entrée immobilise notionnel / levier,
+  # comme chez un vrai courtier forex. Indispensable dès que
+  # risk.max_position_size × prix dépasse initial_capital — sans levier, le
+  # broker simulé refuse ces entrées LONGUES (les ventes, elles, génèrent du
+  # cash et passent toujours), ce qui biaise le backtest d'un seul côté. Tout
+  # ordre refusé est journalisé et compté dans stats["rejected_orders"].
+  # 30 = plafond retail ESMA sur les majeures ; 1 = compte cash strict.
+  leverage: 30.0
 
 history:
   # Données historiques M1 (Dukascopy) pour le backtest — voir

@@ -39,6 +39,17 @@ Détails d'implémentation :
   RiskManager) : le P&L backtrader et ``broker.getvalue()`` sont directement les
   montants du compte, sans re-scaling post-hoc. La courbe d'équité est la
   VALEUR DU COMPTE (elle part du capital initial) ;
+- **effet de levier** (``backtest.leverage``, 30 par défaut — plafond retail
+  ESMA sur les majeures) : un compte forex n'immobilise pas le notionnel, mais
+  une marge. Sans levier, backtrader (broker *stocklike*, cash only) refuse
+  toute entrée dont ``taille × prix`` dépasse le cash — silencieusement, et
+  **asymétriquement** : une vente génère du cash, elle passe toujours, si bien
+  qu'un modèle des deux côtés ne rapportait que ses SHORTs. Le levier ramène le
+  besoin de cash à ``notionnel / levier``, comme chez un vrai courtier ;
+- **aucun rejet silencieux** : ``notify_order`` compte les ordres refusés
+  (marge, rejet courtier) et les remonte dans ``stats["rejected_orders"]`` —
+  l'interface ne peut donc plus présenter une exécution ratée comme une
+  abstention du modèle ;
 - ``Open`` synthétisé = close précédent borné dans [low, high] : PyEA modélise un
   marché continu (close-à-close, sans gap), ce qui reproduit exactement les
   barrières « au prix exact » et évite de fausses ouvertures en gap. Frames sans
@@ -166,6 +177,9 @@ class _StrategyBridge(bt.Strategy):
         self._pending_exit: tuple[datetime, float] | None = None  # clôture forcée
         self.trades: list[dict[str, Any]] = []
         self.equity: list[tuple[datetime, float]] = []
+        # Ordres refusés par le broker simulé (marge insuffisante, rejet). Un
+        # rejet non compté se lisait comme « le modèle n'a pas émis de signal ».
+        self.rejected: int = 0
 
     # -- helpers ------------------------------------------------------------
     def _await(self, coro):
@@ -176,6 +190,30 @@ class _StrategyBridge(bt.Strategy):
             self.cancel(order)
 
     # -- callbacks backtrader ----------------------------------------------
+    def notify_order(self, order: bt.Order) -> None:
+        """Rend VISIBLE tout ordre refusé par le broker simulé.
+
+        Sans ce callback, un refus (marge insuffisante, rejet) était avalé sans
+        trace : la position ne s'ouvrait pas, ``notify_trade`` ne se déclenchait
+        jamais, et le backtest présentait le résultat comme « le modèle n'a émis
+        aucun signal ». On compte le refus, on le journalise, et on remet à zéro
+        l'état d'entrée — sans quoi ``_open_side`` restait « long » pour une
+        position inexistante et bloquait la clôture de fin de semaine.
+        """
+        if order.status not in (order.Margin, order.Rejected):
+            return
+        self.rejected += 1
+        logger.warning(
+            "Backtest %s : ordre %s de %s unité(s) REFUSÉ par le broker simulé "
+            "(%s) — marge insuffisante ? Vérifier risk.max_position_size, "
+            "backtest.initial_capital et backtest.leverage.",
+            self.p.symbol, "BUY" if order.isbuy() else "SELL",
+            abs(order.created.size), order.getstatusname(),
+        )
+        if not self.position:
+            self._open_side = None
+            self._entry_time = self._entry_price = self._entry_size = None
+
     def notify_trade(self, trade: bt.Trade) -> None:
         if not trade.isclosed or self._open_side is None:
             return
@@ -287,12 +325,17 @@ class BacktestEngine:
         risk_manager: RiskManager,
         commission_per_unit: float = 0.0,
         initial_capital: float = 10000.0,
+        leverage: float = 30.0,
     ) -> None:
         self._strategy = strategy
         self._risk = risk_manager
         # Capital de départ du compte simulé : la courbe d'équité est la
         # VALEUR DU COMPTE (elle part de ce capital).
         self._initial_capital = float(initial_capital)
+        # Levier du compte : le cash immobilisé par une entrée vaut
+        # notionnel / levier (cf. en-tête du module). À 1, le moteur redevient
+        # un compte cash strict et refuse les entrées trop grosses.
+        self._leverage = float(leverage)
         # Commission éventuelle du courtier, PAR CÔTÉ et par unité, en unités
         # de prix (même échelle que le spread, pour se composer avec le P&L).
         self._commission = float(commission_per_unit)
@@ -378,12 +421,16 @@ class BacktestEngine:
         # ainsi — plutôt qu'en décalant les prix — garde les barrières remplies
         # à leur prix EXACT, ce qui est correct : le flux est en bid, or un long
         # sort bien au bid (et un short entre bien au bid).
-        if cost_per_side > 0:
-            cerebro.broker.setcommission(
-                commission=cost_per_side,
-                commtype=bt.CommInfoBase.COMM_FIXED,
-                stocklike=True,
-            )
+        #
+        # Toujours posé (même à coût nul) : c'est aussi ce qui porte le LEVIER,
+        # sans lequel toute entrée longue dont le notionnel dépasse le capital
+        # est refusée en marge — silencieusement, et sans toucher les ventes.
+        cerebro.broker.setcommission(
+            commission=cost_per_side,
+            commtype=bt.CommInfoBase.COMM_FIXED,
+            stocklike=True,
+            leverage=self._leverage,
+        )
         cerebro.adddata(feed)
         cerebro.addstrategy(
             _StrategyBridge,
@@ -482,7 +529,11 @@ def _max_drawdown(equity_curve: list[tuple[datetime, float]]) -> tuple[float, fl
         max_dd = max(max_dd, dd)
         if peak > 0:
             max_dd_pct = max(max_dd_pct, dd / peak)
-    return round(max_dd, 5), round(max_dd_pct, 5)
+    # Le RATIO est arrondi bien plus finement que le montant : rapporté à un
+    # capital à cinq chiffres, un drawdown parfaitement lisible en devise vaut
+    # 1e-5 en fraction — arrondi à 5 décimales, il disparaissait purement et
+    # simplement de l'interface.
+    return round(max_dd, 5), round(max_dd_pct, 8)
 
 
 def _empty_stats(bars: int, initial_capital: float) -> dict[str, Any]:
@@ -495,7 +546,7 @@ def _empty_stats(bars: int, initial_capital: float) -> dict[str, Any]:
         "gross_pnl": 0.0, "total_costs": 0.0,
         "costs_modelled": False, "spread": None, "commission_per_unit": 0.0,
         "initial_capital": initial_capital, "final_equity": initial_capital,
-        "return_pct": 0.0,
+        "return_pct": 0.0, "rejected_orders": 0,
     }
 
 
@@ -534,7 +585,15 @@ def _build_stats(
         # --- métriques de compte (rapportées au capital de départ) ---
         "initial_capital": initial_capital,
         "final_equity": round(final_equity, 5),
-        "return_pct": round(total_pnl / initial_capital, 5),
+        # Arrondi FIN (cf. _max_drawdown) : à 5 décimales, le rendement d'un
+        # backtest à taille unitaire sur un capital à cinq chiffres tombait à
+        # zéro et la carte « Rendement » n'affichait plus jamais rien.
+        "return_pct": round(total_pnl / initial_capital, 8),
+        # Ordres refusés par le broker simulé : 0 attendu. Non nul = des
+        # signaux ont été émis mais N'ONT PAS pu s'exécuter (marge) — le
+        # résultat n'est alors pas une abstention du modèle, et l'interface
+        # doit le dire au lieu d'inventer une explication.
+        "rejected_orders": strat.rejected,
         "win_rate": round(len(wins) / len(pnls), 4) if pnls else None,
         "max_drawdown": max_dd,
         "max_drawdown_pct": max_dd_pct,

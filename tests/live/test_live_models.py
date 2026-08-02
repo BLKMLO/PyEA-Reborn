@@ -87,12 +87,13 @@ def test_run_le_plus_recent_gagne(tmp_db: None, tmp_path: Path) -> None:
 
 
 def test_repli_sur_le_run_poole_all(tmp_db: None, tmp_path: Path) -> None:
-    """Sans run propre au symbole, le run poolé ALL sert tous les actifs."""
+    """Sans run propre au symbole, le run poolé ALL sert les actifs QU'IL A VUS."""
     artifacts = tmp_path / "run-pool"
     _write_model(artifacts, 1)
     _write_model(artifacts, 2)
     create_run("run-pool", "couleuvre_v0_2", "ALL", "H4", 2, {})
-    finish_run("run-pool", "completed", {"trades": 1}, str(artifacts))
+    finish_run("run-pool", "completed", {"trades": 1}, str(artifacts),
+               trained_symbols=["EURUSD", "XAUUSD", "US500"])
 
     for symbol in ("EURUSD", "XAUUSD", "US500"):
         model = resolve_live_model("couleuvre_v0_2", symbol)
@@ -110,11 +111,44 @@ def test_le_run_du_symbole_est_prioritaire_sur_all(tmp_db: None, tmp_path: Path)
     _write_model(pooled, 1)
     _write_model(propre, 1)
     create_run("run-pool", "couleuvre_v0_2", "ALL", "H4", 1, {})
-    finish_run("run-pool", "completed", {"trades": 1}, str(pooled))
+    finish_run("run-pool", "completed", {"trades": 1}, str(pooled),
+               trained_symbols=["EURUSD", "GBPUSD"])
     create_run("run-propre", "couleuvre_v0_2", "EURUSD", "H1", 1, {})
     finish_run("run-propre", "completed", {"trades": 1}, str(propre))
 
     model = resolve_live_model("couleuvre_v0_2", "EURUSD")
     assert model is not None and model.run_id == "run-propre"
-    # Un autre symbole, lui, retombe bien sur le run poolé.
+    # Un autre symbole du pool, lui, retombe bien sur le run poolé.
     assert resolve_live_model("couleuvre_v0_2", "GBPUSD").run_id == "run-pool"
+
+
+def test_repli_poole_refuse_un_actif_jamais_entraine(
+    tmp_db: None, tmp_path: Path
+) -> None:
+    """Le modèle mutualisé ne couvre QUE les actifs qu'il a vus.
+
+    Une paire téléchargée après l'entraînement recevait sinon un modèle sans
+    une seule bougie d'elle (catégorie « symbole » inconnue → code -1) et
+    émettait de vrais ordres dessus.
+    """
+    artifacts = tmp_path / "run-pool"
+    _write_model(artifacts, 1)
+    create_run("run-pool", "couleuvre_v0_2", "ALL", "H4", 1, {})
+    finish_run("run-pool", "completed", {"trades": 1}, str(artifacts),
+               trained_symbols=["EURUSD", "GBPUSD"])
+
+    assert resolve_live_model("couleuvre_v0_2", "EURUSD") is not None
+    assert resolve_live_model("couleuvre_v0_2", "XAUUSD") is None
+
+
+def test_repli_poole_refuse_un_run_sans_actifs_connus(
+    tmp_db: None, tmp_path: Path
+) -> None:
+    """Run poolé sans liste d'actifs (antérieur à son enregistrement) : on ne
+    peut RIEN prouver, donc on ne trade pas — jamais de modèle par défaut."""
+    artifacts = tmp_path / "run-pool"
+    _write_model(artifacts, 1)
+    create_run("run-pool", "couleuvre_v0_2", "ALL", "H4", 1, {})
+    finish_run("run-pool", "completed", {"trades": 1}, str(artifacts))
+
+    assert resolve_live_model("couleuvre_v0_2", "EURUSD") is None

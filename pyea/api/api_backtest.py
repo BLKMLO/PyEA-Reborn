@@ -60,7 +60,10 @@ def get_datasets() -> dict[str, Any]:
 class BacktestRunRequest(BaseModel):
     symbol: str
     timeframe: str = "H1"
-    strategy: str = "couleuvre_v0_1"
+    # Même défaut que l'entraînement et que ``strategy.name`` de config.yaml :
+    # backtester une AUTRE stratégie que celle qu'on vient d'entraîner ne
+    # trouve aucun modèle et rend une courbe plate sans explication.
+    strategy: str = "couleuvre_v0_2"
     start: date | None = None
     end: date | None = None
 
@@ -118,6 +121,7 @@ def run_backtest(request: BacktestRunRequest) -> dict[str, Any]:
         strategy_cls(), RiskManager(settings),
         commission_per_unit=settings.costs_commission_per_unit,
         initial_capital=settings.backtest_initial_capital,
+        leverage=settings.backtest_leverage,
     )
     result = engine.run(
         request.symbol, frame, request.timeframe,

@@ -63,7 +63,10 @@ class Settings(BaseSettings):
     server_port: int = Field(default=8000, ge=1, le=65535)
     broker_name: str = "interactive_brokers"
     trading_mode: Literal["paper", "live"] = "paper"
-    strategy_name: str = "couleuvre_v0_1"
+    # Doit rester aligné avec les défauts des requêtes entraînement/backtest :
+    # un écart fait chercher au live un modèle sous un autre nom de stratégie
+    # que celui effectivement entraîné (stratégie muette, sans explication).
+    strategy_name: str = "couleuvre_v0_2"
     strategy_enabled: bool = False
     ui_chart_refresh_seconds: int = Field(default=5, ge=1)
     risk_max_position_size: float = Field(default=1, gt=0)
@@ -84,6 +87,13 @@ class Settings(BaseSettings):
     # renvoyée est la VALEUR DU COMPTE : elle part de ce capital, et les
     # métriques de compte (return_pct, drawdown %) s'y rapportent.
     backtest_initial_capital: float = Field(default=10000.0, gt=0)
+    # Effet de levier du compte simulé. Un compte forex n'immobilise pas le
+    # notionnel d'une position mais une marge (notionnel / levier) : sans
+    # levier, toute entrée LONGUE dont la taille dépasse le capital est
+    # refusée par le broker simulé, alors que les ventes passent toujours —
+    # un biais directionnel invisible. 30 = plafond retail ESMA (majeures) ;
+    # 1 = compte cash strict (aucun levier).
+    backtest_leverage: float = Field(default=30.0, ge=1)
     history_data_dir: str = "./data/history"
     history_start_year: int = Field(default=2010, ge=1990, le=2100)
     history_instruments: list[str] = ["EURUSD"]
@@ -144,6 +154,7 @@ def _yaml_overrides(raw: dict[str, Any]) -> dict[str, Any]:
         "risk_max_open_positions": risk.get("max_open_positions"),
         "costs_commission_per_unit": costs.get("commission_per_unit"),
         "backtest_initial_capital": backtest.get("initial_capital"),
+        "backtest_leverage": backtest.get("leverage"),
         "history_data_dir": history.get("data_dir"),
         "history_start_year": history.get("start_year"),
         "history_instruments": history.get("instruments"),

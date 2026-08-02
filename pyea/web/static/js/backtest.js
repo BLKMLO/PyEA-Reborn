@@ -36,7 +36,10 @@ async function loadDatasets() {
   }
   fillSelect("bt-symbol", data.datasets.map(d => d.symbol));
   fillSelect("bt-timeframe", data.timeframes, "H1");
-  fillSelect("bt-strategy", data.strategies);
+  // Même défaut que la page Entraînement : sans quoi on backtestait la
+  // première stratégie du registre (v0_1) juste après avoir entraîné la v0_2,
+  // sans modèle à charger et sans que rien ne l'explique.
+  fillSelect("bt-strategy", data.strategies, "couleuvre_v0_2");
   message.textContent = "";
 }
 
@@ -94,11 +97,35 @@ function money(value) {
       });
 }
 
+// Montant à l'échelle du FOREX : un spread cumulé ou un trade moyen à taille
+// unitaire vaut quelques millièmes. Arrondi à 2 décimales (money), il devient
+// « 0,00 » — précisément le chiffre qu'il ne faut pas cacher. On garde donc 5
+// décimales sous l'unité, 2 au-dessus (montants de compte).
+function amount(value) {
+  if (value == null || Number.isNaN(value)) return "—";
+  return Math.abs(Number(value)) < 1
+    ? Number(value).toFixed(5).replace(".", ",")
+    : money(value);
+}
+
+// Pourcentage à une décimale, MAIS jamais arrondi jusqu'à disparaître : sous
+// 0,05 %, on ajoute des décimales plutôt que d'afficher « 0,0 % » pour une
+// valeur non nulle (un rendement à taille unitaire sur un capital à cinq
+// chiffres vit à cette échelle).
+function pctFine(value) {
+  if (value == null || Number.isNaN(value)) return "—";
+  const percent = Number(value) * 100;
+  if (percent !== 0 && Math.abs(percent) < 0.05) {
+    return `${percent.toFixed(4).replace(".", ",")} %`;
+  }
+  return pct1(value);
+}
+
 // Coûts payés (spread + commission). Sans données ask, rien n'est modélisé :
 // on le dit franchement plutôt que d'afficher un zéro trompeur.
 function costLabel(stats) {
   if (!stats.costs_modelled) return "non modélisés";
-  return `−${money(stats.total_costs)}`;
+  return `−${amount(stats.total_costs)}`;
 }
 
 // Bandeau sous les cartes : d'où vient le spread, et ce qu'il coûte face au
@@ -142,10 +169,24 @@ function renderModelNote(result) {
     note.classList.remove("hidden");
     return;
   }
-  // Modèle chargé mais 0 trade : l'early stopping produit un modèle qui
-  // s'abstient (probas jamais au-delà des seuils d'entrée). Résultat honnête
-  // (pas d'edge exploitable), pas un bug — le dire évite de lire la courbe
-  // plate comme un dysfonctionnement.
+  // Des signaux ONT été émis mais le broker simulé a refusé les ordres
+  // (marge) : ce n'est pas une abstention du modèle, et le résultat est
+  // amputé — les ventes, qui génèrent du cash, passent toujours, si bien
+  // qu'un modèle des deux côtés ne rapporterait que ses SHORTs.
+  if (result.stats.rejected_orders) {
+    note.className = "rounded border border-red-700/60 bg-red-900/20 px-3 py-2 text-[11px] text-red-300";
+    note.textContent =
+      `⚠ ${result.stats.rejected_orders} ordre(s) REFUSÉ(S) par le broker simulé ` +
+      "(marge insuffisante) : ce résultat est incomplet et biaisé, pas une " +
+      "abstention du modèle. Réduisez risk.max_position_size, augmentez " +
+      "backtest.initial_capital, ou relevez backtest.leverage.";
+    note.classList.remove("hidden");
+    return;
+  }
+  // Modèle chargé, aucun ordre refusé, et 0 trade : l'early stopping produit
+  // un modèle qui s'abstient (probas jamais au-delà des seuils d'entrée).
+  // Résultat honnête (pas d'edge exploitable), pas un bug — le dire évite de
+  // lire la courbe plate comme un dysfonctionnement.
   if (result.stats.trades === 0) {
     note.className = "rounded border border-amber-700/60 bg-amber-900/20 px-3 py-2 text-[11px] text-amber-300";
     note.textContent =
@@ -178,15 +219,15 @@ function renderResults(result) {
     // Langage « compte » d'abord : ce qu'on avait, ce qu'on a, ce que ça rend.
     statCard("Capital initial", money(stats.initial_capital)) +
     statCard("Capital final", money(stats.final_equity)) +
-    statCard("Rendement", pct1(stats.return_pct)) +
+    statCard("Rendement", pctFine(stats.return_pct)) +
     // P&L NET de spread et commission — le seul chiffre qui compte.
     statCard("P&L net", stats.total_pnl, { colored: true }) +
-    statCard("Drawdown max", pct1(stats.max_drawdown_pct),
-             { hint: `soit ${money(stats.max_drawdown)} en dessous du plus haut` }) +
+    statCard("Drawdown max", pctFine(stats.max_drawdown_pct),
+             { hint: `soit ${amount(stats.max_drawdown)} en dessous du plus haut` }) +
     statCard("Taux de gain", pct1(stats.win_rate)) +
     statCard("Profit factor", num2(stats.profit_factor)) +
     statCard("Trades", stats.trades) +
-    statCard("Trade moyen", money(stats.avg_trade_pnl)) +
+    statCard("Trade moyen", amount(stats.avg_trade_pnl)) +
     // Métrique fournie par backtrader (moteur d'exécution).
     statCard("Sharpe", num2(stats.sharpe_ratio)) +
     statCard("Coûts", costLabel(stats)) +

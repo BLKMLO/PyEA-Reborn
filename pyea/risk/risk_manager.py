@@ -11,10 +11,11 @@ Limites appliquées (section ``risk`` de config.yaml) :
   aucune ENTRÉE n'est autorisée ; les sorties le restent toujours.
 
 ⚠ La limite de perte journalière est une garde **LIVE**. Elle exige l'équité
-réelle du compte, que seul le broker fournit — le backtest, lui, ne trade
-qu'une unité nominale sur un capital synthétique, où un pourcentage d'équité
-n'a aucun sens. Un backtest est donc, sur ce point, légèrement OPTIMISTE par
-rapport au live : c'est assumé et documenté plutôt que simulé de travers.
+réelle du compte, remise à jour en continu, que seul le broker fournit. Le
+backtest tourne pourtant bien sur un capital réel (``backtest.initial_capital``)
+et trade la taille réelle : il ne modélise simplement pas cette limite. Il est
+donc, sur ce seul point, légèrement OPTIMISTE par rapport au live — c'est
+assumé et documenté plutôt que simulé de travers.
 
 À enrichir plus tard : sizing dynamique (volatilité, corrélations).
 """

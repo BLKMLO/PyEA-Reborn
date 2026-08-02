@@ -195,6 +195,54 @@ def test_metriques_de_compte_exactes_sur_aller_retour() -> None:
     assert result.trades[0].quantity == size
 
 
+# --- Levier : symétrie long/short sur un compte de taille réaliste ---------
+# Un broker cash-only refuse les ENTRÉES LONGUES dont le notionnel dépasse le
+# capital, mais laisse toujours passer les ventes (elles génèrent du cash) —
+# un backtest silencieusement amputé de ses achats.
+
+
+def _engine_taille(size: float, capital: float, leverage: float,
+                   action: SignalAction) -> Any:
+    settings = get_settings()
+    saved = settings.risk_max_position_size
+    settings.risk_max_position_size = size
+    try:
+        engine = BacktestEngine(
+            ScriptedStrategy({0: action, 2: SignalAction.EXIT}),
+            RiskManager(settings),
+            initial_capital=capital,
+            leverage=leverage,
+        )
+        return engine.run("EURUSD", _frame([1.10, 1.11, 1.12, 1.12]), "H1")
+    finally:
+        settings.risk_max_position_size = saved
+
+
+def test_entree_longue_au_dela_du_cash_passe_avec_levier() -> None:
+    # Un mini-lot (10 000 unités à 1.10 = 11 000 de notionnel) sur un compte de
+    # 10 000 : impossible sans levier, banal avec.
+    result = _engine_taille(10_000, 10_000.0, 30.0, SignalAction.ENTER_LONG)
+    assert result.stats["rejected_orders"] == 0
+    assert result.stats["trades"] == 1
+    assert result.trades[0].side == "BUY"
+
+
+def test_long_et_short_traitent_la_meme_taille_identiquement() -> None:
+    # Le biais était directionnel : mêmes conditions, le SELL passait seul.
+    achat = _engine_taille(10_000, 10_000.0, 30.0, SignalAction.ENTER_LONG)
+    vente = _engine_taille(10_000, 10_000.0, 30.0, SignalAction.ENTER_SHORT)
+    assert achat.stats["trades"] == vente.stats["trades"] == 1
+
+
+def test_ordre_refuse_est_compte_et_non_silencieux() -> None:
+    # Levier 1 = compte cash strict : l'entrée est refusée — mais elle est
+    # COMPTÉE, pour que l'interface ne la présente pas comme une abstention
+    # du modèle.
+    result = _engine_taille(10_000, 10_000.0, 1.0, SignalAction.ENTER_LONG)
+    assert result.stats["trades"] == 0
+    assert result.stats["rejected_orders"] >= 1
+
+
 def test_drawdown_absolu_et_pourcentage() -> None:
     # Long à 1.0 (bougie 0), le cours monte à 2.0 puis revient à 1.0 (sortie) :
     # pic = capital + 1 × taille, creux = capital → DD = taille, en absolu et
@@ -209,8 +257,11 @@ def test_drawdown_absolu_et_pourcentage() -> None:
     size = get_settings().risk_max_position_size
     pic = capital + 1.0 * size
     assert result.stats["max_drawdown"] == pytest.approx(round(1.0 * size, 5))
+    # Arrondi FIN (8 décimales) : rapporté à un capital à cinq chiffres, un
+    # drawdown parfaitement lisible en devise vaut ~1e-5 en fraction — à 5
+    # décimales, il se serait évaporé.
     assert result.stats["max_drawdown_pct"] == pytest.approx(
-        round(1.0 * size / pic, 5)
+        round(1.0 * size / pic, 8)
     )
 
 

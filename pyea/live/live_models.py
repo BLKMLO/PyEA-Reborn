@@ -6,7 +6,8 @@ d'entraînement RÉUSSI** le concernant, et dans ce run, le modèle du
 plus de données). Deux sources, par priorité : le run du symbole (modèle
 par actif, couleuvre_v0_1) puis, à défaut, le run **poolé ``ALL``** (modèle
 unique multi-actifs, couleuvre_v0_2 — le même artefact sert alors tous les
-symboles). Le walk-forward valide (métriques OOS honnêtes) mais entraîne un
+symboles **qu'il a effectivement vus à l'entraînement**, et eux seuls). Le
+walk-forward valide (métriques OOS honnêtes) mais entraîne un
 modèle par pli sur des tranches croissantes ; le dernier pli est donc le
 modèle « le plus mûr » disponible sans étape de ré-entraînement final
 dédiée (piste d'amélioration future, notée).
@@ -45,11 +46,27 @@ def resolve_live_model(strategy_name: str, symbol: str) -> LiveModel | None:
 
     Deux sources, par priorité : le run du symbole lui-même (modèle par
     actif, v0_1), puis le run POOLÉ ``ALL`` (modèle unique multi-actifs,
-    v0_2) — le même modèle sert alors tous les symboles.
+    v0_2) — mais UNIQUEMENT si ce run a réellement été entraîné sur le
+    symbole demandé (``trained_symbols``). Un modèle mutualisé ne couvre que
+    les actifs qu'il a vus : le servir aux autres reviendrait à trader une
+    paire sur laquelle il n'a aucune donnée.
     """
     run = latest_completed_run(strategy_name, symbol)
     if run is None:
+        # Repli poolé — sous CONDITION que le run ait vraiment vu ce symbole.
+        # Sans cette vérification, une paire téléchargée APRÈS l'entraînement
+        # recevait le modèle mutualisé : la catégorie « symbole » lui vaut le
+        # code -1 (inconnue), et le modèle émettait de vrais ordres sur un
+        # actif dont il n'a jamais lu une seule bougie.
         run = latest_completed_run(strategy_name, POOLED_RUN_SYMBOL)
+        if run is not None and symbol not in (run.get("trained_symbols") or []):
+            logger.warning(
+                "Aucun modèle %s pour %s : le run poolé %s n'a PAS été entraîné "
+                "sur cet actif (actifs du run : %s) — paire non tradée.",
+                strategy_name, symbol, run["id"],
+                ", ".join(run.get("trained_symbols") or []) or "inconnus",
+            )
+            return None
     if run is None or not run.get("artifacts_path"):
         return None
     artifacts = Path(run["artifacts_path"])

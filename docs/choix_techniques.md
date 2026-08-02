@@ -106,8 +106,14 @@ développe le raisonnement pour celles qui structurent le projet.
     l'exécution + la comptabilité. Entrée Market (cheat-on-close), barrières
     = Stop (SL) + Limit (TP) natifs **OCO** au prix exact, tie-break = stop
     (natif), clôture forcée fin de semaine + liquidation finale via ordres
-    Market. On ne trade qu'1 unité nominale, le P&L linéaire est re-scalé par
-    `max_position_size` (Sharpe/SQN invariants d'échelle). **Fidélité
+    Market. Le compte simulé part du **capital réel** (`backtest.initial_capital`)
+    et trade la **taille réelle** (`risk.max_position_size`) : les montants
+    backtrader sont directement ceux du compte. Un **levier**
+    (`backtest.leverage`, 30 par défaut) modélise la marge d'un courtier forex
+    — sans lui, le broker cash-only refuserait les entrées longues dont le
+    notionnel dépasse le capital tout en laissant passer les ventes, biais
+    directionnel silencieux. Tout ordre refusé est journalisé et compté dans
+    `stats["rejected_orders"]`. **Fidélité
     vérifiée bougie à bougie** : les valeurs des tests moteur sont identiques
     à l'ancien moteur maison ; gain net = analyzers standard (Sharpe, SQN,
     profit factor) et une exécution éprouvée.

@@ -203,12 +203,13 @@ def run_walkforward(
     cancelled: CancelCheck,
     commission_per_unit: float = 0.0,
     initial_capital: float = 10000.0,
+    leverage: float = 30.0,
 ) -> dict[str, Any]:
     """Walk-forward MONO-actif (signature historique, inchangée)."""
     return _run(
         strategy_factory, risk_manager, {symbol: frame}, symbol, timeframe,
         n_folds, artifacts_dir, progress, cancelled, commission_per_unit,
-        initial_capital,
+        initial_capital, leverage, pooled=False,
     )
 
 
@@ -223,6 +224,7 @@ def run_walkforward_pooled(
     cancelled: CancelCheck,
     commission_per_unit: float = 0.0,
     initial_capital: float = 10000.0,
+    leverage: float = 30.0,
 ) -> dict[str, Any]:
     """Walk-forward POOLÉ : UN modèle par pli, entraîné sur tous les actifs.
 
@@ -236,7 +238,7 @@ def run_walkforward_pooled(
     return _run(
         strategy_factory, risk_manager, frames, "ALL", timeframe,
         n_folds, artifacts_dir, progress, cancelled, commission_per_unit,
-        initial_capital,
+        initial_capital, leverage, pooled=True,
     )
 
 
@@ -252,6 +254,8 @@ def _run(
     cancelled: CancelCheck,
     commission_per_unit: float,
     initial_capital: float,
+    leverage: float,
+    pooled: bool,
 ) -> dict[str, Any]:
     """Exécute le walk-forward complet ; conçu pour tourner dans un thread.
 
@@ -260,12 +264,38 @@ def _run(
     tard, les modèles retournés par ``strategy.train``) dans
     ``artifacts_dir``.
     """
-    mono = len(frames) == 1
+    mono = not pooled
     folds_frames = _split_frames(frames, n_folds)
+    # Actifs RÉELLEMENT retenus : ``_split_frames`` écarte ceux qui ne
+    # couvrent pas la plage commune. Se fier à ``frames`` (la demande) faisait
+    # figurer un actif écarté dans le rapport avec « 0 trade / 0,00 » —
+    # indiscernable d'un actif effectivement tradé sur lequel le modèle s'est
+    # abstenu, et donc une affirmation fabriquée.
+    retained = sorted(
+        {s for train, test in folds_frames for s in (*train, *test)}
+    )
+    dropped = sorted(set(frames) - set(retained))
+    if dropped:
+        logger.warning(
+            "Walk-forward : %s écarté(s) du run (couverture incompatible) — "
+            "absent(s) du modèle ET du rapport.", ", ".join(dropped),
+        )
+    # Un run POOLÉ dont la découpe ne laisse qu'un actif n'est plus un modèle
+    # multi-actifs : il serait pourtant enregistré sous la sentinelle ``ALL``
+    # et servi à TOUTES les paires en live. On échoue avec un message clair
+    # plutôt que de livrer un modèle mono-actif sous une étiquette mutualisée.
+    if pooled and len(retained) < 2:
+        raise ValueError(
+            "Mode poolé : un seul actif survit à la découpe "
+            f"({', '.join(retained) or 'aucun'}) — les autres n'ont pas de "
+            f"plage commune ({', '.join(dropped)}). Un modèle « multi-actifs » "
+            "ne peut pas être entraîné sur un seul actif : téléchargez des "
+            "historiques qui se recouvrent, ou entraînez par actif."
+        )
     folds: list[WalkForwardFold] = []
     oos_equity: list[dict[str, Any]] = []
     oos_trade_pnls: list[float] = []
-    per_symbol_pnls: dict[str, list[float]] = {s: [] for s in frames}
+    per_symbol_pnls: dict[str, list[float]] = {s: [] for s in retained}
     oos_offset = 0.0
 
     for i, (train_frames, test_frames) in enumerate(folds_frames):
@@ -325,7 +355,8 @@ def _run(
                 else None
             )
             engine = BacktestEngine(
-                strategy, risk_manager, commission_per_unit, initial_capital
+                strategy, risk_manager, commission_per_unit, initial_capital,
+                leverage,
             )
             results[symbol] = engine.run(symbol, test_frame, timeframe, context=context)
             warmup_frame = (
@@ -371,7 +402,8 @@ def _run(
 
     report = _report(
         label, timeframe, folds, oos_equity, oos_trade_pnls, cancelled=False,
-        symbols=sorted(frames),
+        symbols=retained,
+        dropped_symbols=dropped,
         by_symbol_pnls=None if mono else per_symbol_pnls,
     )
     artifacts_dir.mkdir(parents=True, exist_ok=True)
@@ -439,7 +471,12 @@ def _aggregate_symbol_stats(
         "total_pnl": round(sum(pnls), 5),
         "gross_pnl": round(sum(s.get("gross_pnl", 0.0) for s in stats_list), 5),
         "total_costs": round(sum(s.get("total_costs", 0.0) for s in stats_list), 5),
-        "costs_modelled": any(s.get("costs_modelled") for s in stats_list),
+        # ``all`` et non ``any`` : le drapeau affirme « TOUS ces trades ont
+        # payé leurs coûts ». Un seul actif pourvu de colonnes ask ne peut pas
+        # en répondre pour les autres — sinon l'interface masque son
+        # avertissement « résultats OPTIMISTES » alors que l'essentiel des
+        # trades du pli s'est exécuté gratuitement.
+        "costs_modelled": all(s.get("costs_modelled") for s in stats_list),
         "spread": None,  # différent par actif — voir per_symbol
         "commission_per_unit": stats_list[0].get("commission_per_unit", 0.0),
         "win_rate": round(len(wins) / len(pnls), 4) if pnls else None,
@@ -461,6 +498,7 @@ def _report(
     oos_trade_pnls: list[float],
     cancelled: bool,
     symbols: list[str] | None = None,
+    dropped_symbols: list[str] | None = None,
     by_symbol_pnls: dict[str, list[float]] | None = None,
 ) -> dict[str, Any]:
     trades = sum(fold.test_stats.get("trades", 0) for fold in folds)
@@ -468,7 +506,11 @@ def _report(
     # Coûts (spread + commission) payés sur l'ensemble des trades OOS. Affichés
     # à part : c'est l'écart entre « ça a l'air de marcher » et « ça marche ».
     total_costs = round(sum(fold.test_stats.get("total_costs", 0.0) for fold in folds), 5)
-    costs_modelled = any(fold.test_stats.get("costs_modelled") for fold in folds)
+    # ``all`` (cf. _aggregate_symbol_stats) : le drapeau ne vaut que si CHAQUE
+    # pli a modélisé ses coûts — un pli gratuit rendrait l'agrégat optimiste.
+    costs_modelled = bool(folds) and all(
+        fold.test_stats.get("costs_modelled") for fold in folds
+    )
     equity_values = [point["equity"] for point in oos_equity]
     max_drawdown, peak = 0.0, float("-inf")
     for value in equity_values:
@@ -502,6 +544,11 @@ def _report(
     }
     if symbols is not None:
         report["symbols"] = symbols
+    if dropped_symbols:
+        # Actifs DEMANDÉS mais absents du run (couverture incompatible). Les
+        # taire les faisait passer pour tradés-sans-signal ; les nommer permet
+        # à l'interface de dire « non entraîné » plutôt que « 0 trade ».
+        report["dropped_symbols"] = dropped_symbols
     if by_symbol_pnls is not None:
         # Ventilation par actif, agrégée avec la MÊME honnêteté que le global
         # (taux de gain et PF sur tous les trades de l'actif, jamais moyennés).
